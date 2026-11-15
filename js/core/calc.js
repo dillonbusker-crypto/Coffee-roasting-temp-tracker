@@ -37,7 +37,7 @@ export function rorAt(smooth, t, windowSec = 30) {
 }
 
 // Whole-series helpers. A second with no reading has no smoothed value either, so
-// gaps stay gaps on the chart; the surrounding seconds still use the readings they have.
+// gaps stay gaps on the chart.
 export function smoothSeries(raw, windowSec = 10) {
   return raw.map((v, t) => (v == null ? null : smoothAt(raw, t, windowSec)));
 }
@@ -46,20 +46,51 @@ export function rorSeries(smooth, windowSec = 30) {
   return smooth.map((v, t) => (v == null ? null : rorAt(smooth, t, windowSec)));
 }
 
+// Smoothed value only when its window is complete: at least 80% of the last windowSec
+// seconds hold a reading. A window that is mostly empty (the seconds after a dropout, or
+// the first seconds of a roast) averages older points than usual, so it sits above the
+// true curve by a few degrees and would bend the rate of rise. Such seconds are skipped
+// when fitting the rate.
+export function trustedSmoothAt(raw, t, windowSec = 10, minFrac = 0.8) {
+  if (t < windowSec - 1) return null;
+  let n = 0;
+  for (let i = t - windowSec + 1; i <= t; i++) if (raw[i] != null) n++;
+  return n >= minFrac * windowSec ? smoothAt(raw, t, windowSec) : null;
+}
+
+// The smoothed and rate-of-rise series for a whole roast, computed exactly as a live
+// session computes them second by second.
+export function analyzeSeries(raw, smoothSec = 10, rorWindowSec = 30) {
+  const smooth = [];
+  const trusted = [];
+  const ror = [];
+  for (let t = 0; t < raw.length; t++) {
+    smooth.push(raw[t] == null ? null : smoothAt(raw, t, smoothSec));
+    trusted.push(raw[t] == null ? null : trustedSmoothAt(raw, t, smoothSec));
+    ror.push(raw[t] == null ? null : rorAt(trusted, t, rorWindowSec));
+  }
+  return { smooth, ror };
+}
+
 // Elapsed second at which temp is projected to reach targetF.
 // Infinity if it never will; null if it cannot be computed.
 //
 // An air roaster's curve flattens as it climbs, so a straight line projected at
 // 2:30 lands far too early. Compare the rate now with the rate lagSec ago; if it is
 // falling, fit an exponential approach to an asymptote and solve for the target.
-export function projectFirstCrack({ t, temp, ror, rorEarlier, lagSec = 45, targetF }) {
+//
+// rorLagSec is how stale the rate is compared with temp: a least-squares slope
+// describes the middle of its window, (windowSec - 1) / 2 seconds back. The fit
+// decays the rate forward over that gap, which removes a bias of 20-30 s at 2:30.
+export function projectFirstCrack({ t, temp, ror, rorEarlier, lagSec = 45, rorLagSec = 0, targetF }) {
   if (t == null || temp == null || targetF == null) return null;
   if (temp >= targetF) return t;
   if (ror == null) return null;
   if (ror <= 0) return Infinity;
   if (rorEarlier != null && rorEarlier > ror) {
     const tau = lagSec / Math.log(rorEarlier / ror);
-    const asymptote = temp + (ror * tau) / 60;
+    const rorNow = ror * Math.exp(-rorLagSec / tau);
+    const asymptote = temp + (rorNow * tau) / 60;
     if (asymptote <= targetF) return Infinity;
     return t - tau * Math.log((asymptote - targetF) / (asymptote - temp));
   }

@@ -37,9 +37,9 @@ export const PRESETS = [
 const MODELS = {
   'on-target': { tau: 150, excess: excessFor(315, 150) },
   fast: { tau: 150, excess: excessFor(210, 150) },
-  slow: { tau: 190, excess: excessFor(465, 190) },
-  stall: { tau: 150, excess: excessFor(315, 150), power: ramp([[130, 1], [160, 0.7]]) },
-  'ror-climb': { tau: 150, excess: excessFor(315, 150), power: ramp([[170, 1], [200, 1.1]]) },
+  slow: { tau: 250, excess: excessFor(465, 250) },
+  stall: { tau: 150, excess: excessFor(315, 150), power: ramp([[130, 1], [155, 0.65]]) },
+  'ror-climb': { tau: 150, excess: excessFor(315, 150), power: ramp([[165, 1], [200, 1.3]]) },
   dropout: { tau: 150, excess: excessFor(315, 150), gaps: [[120, 132], [210, 218]] },
 };
 

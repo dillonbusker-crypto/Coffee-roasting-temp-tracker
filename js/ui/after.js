@@ -6,6 +6,7 @@ import { referenceFromRecord } from './chart-model.js';
 import { weightLossPct } from '../core/calc.js';
 import { saveRoast, setReference, getRoast } from '../store/db.js';
 import { clearDraft } from './draft.js';
+import { createControlLogEditor } from './control-log-editor.js';
 
 function switchRow({ id, title, hint, onChange }) {
   let on = false;
@@ -19,7 +20,7 @@ function switchRow({ id, title, hint, onChange }) {
 }
 
 export function mountAfter(root, app) {
-  const record = app.record;
+  let record = app.record;
   const settings = app.settings;
   const units = settings.units;
   const lo = settings.weightLossMinPct;
@@ -85,6 +86,17 @@ export function mountAfter(root, app) {
     onChange: (v) => { form.refGeneral = v; },
   });
 
+  // The log can be corrected before saving. The chart and the change count follow each edit.
+  const logEditor = createControlLogEditor({
+    controls: record.controls || [],
+    endT: record.results?.totalSec ?? Math.max(0, (record.readings || []).length - 1),
+    onChange: (controls) => {
+      record = { ...record, controls };
+      app.record = record;
+      drawSummary();
+    },
+  });
+
   const error = h('p', { class: 'error-line', id: 'save-error', role: 'alert' }, '');
   const saveBtn = h('button', { type: 'button', class: 'btn primary', id: 'save-btn', onClick: onSave }, 'Save roast');
   const discardBtn = h('button', { type: 'button', class: 'btn danger', id: 'discard-btn', onClick: onDiscard }, 'Discard');
@@ -95,6 +107,9 @@ export function mountAfter(root, app) {
         h('h1', null, 'Roast done'),
         h('p', { class: 'muted small' }, `${record.coffee || 'Untitled'} · ${fmtDateTime(record.startedAt)} · ${record.greenWeightG} g green`))),
     summaryHost,
+    h('section', { class: 'card', id: 'log-card' },
+      h('h2', null, 'Heat and fan log'),
+      logEditor.el),
     h('section', { class: 'card' },
       h('h2', null, 'Weight loss'),
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Roasted weight (g)'), weight),
@@ -110,14 +125,19 @@ export function mountAfter(root, app) {
       refCoffee, refGeneral),
     h('div', { class: 'after-actions' }, error, saveBtn, discardBtn)));
 
-  summary = renderRoastSummary(summaryHost, record, { units });
-  app.activeChart = summary.chart;   // test hook: the chart model is readable
+  let refSeries = null;
+  function drawSummary() {
+    if (summary) summary.destroy();
+    summary = renderRoastSummary(summaryHost, record, { units, reference: refSeries, logLine: false });
+    app.activeChart = summary.chart;   // test hook: the chart model is readable
+  }
+  drawSummary();
 
   // If this roast followed a reference, draw that curve behind it too.
   const refId = record.settings && record.settings.referenceId;
   if (refId) {
     getRoast(refId).then((ref) => {
-      if (ref && !disposed) summary.setReference(referenceFromRecord(ref, settings));
+      if (ref && !disposed) { refSeries = referenceFromRecord(ref, settings); summary.setReference(refSeries); }
     }).catch(() => {});
   }
 

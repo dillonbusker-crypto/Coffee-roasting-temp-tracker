@@ -228,7 +228,7 @@ async function main() {
       await shot(page, 'after-full.png', { fullPage: true });
       await page.click('#save-btn');
       await waitHash(page, '#history');
-      assert.match(await text(page, '.stub'), /History/);
+      assert.match(await text(page, '.screen.history'), /History/);
     }
 
     step('Saved record in IndexedDB');

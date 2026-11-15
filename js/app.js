@@ -1,11 +1,15 @@
 // App shell: hash router, shared services, and the roast lifecycle.
 //
 //   #setup  #roast  #after   the roast flow
-//   #history #settings        stubs until their screens exist (register them in ROUTES)
+//   #history  #history/<id>   saved roasts, and one roast's detail
+//   #settings                 targets, thresholds, units, backup
+//
+// A route may carry one path parameter (#history/<id>); the mount function gets it as its third argument.
 //
 // Test-only URL parameters (never shown in the UI):
 //   ?speed=60   demo clock speed multiplier        ?undo=800   Undo window in ms
 //   ?draft=1500 draft write interval in ms
+//   ?nosw       do not register the service worker (only honoured on localhost)
 
 import { loadSettings } from './core/settings.js';
 import { createRoastController } from './ui/roast-controller.js';
@@ -16,6 +20,10 @@ import { saveDraft, clearDraft } from './ui/draft.js';
 import { mountSetup } from './ui/setup.js';
 import { mountRoast } from './ui/roast-screen.js';
 import { mountAfter } from './ui/after.js';
+import { mountHistory } from './ui/history.js';
+import { mountDetail } from './ui/detail.js';
+import { mountSettings } from './ui/settings-screen.js';
+import { registerServiceWorker } from './ui/pwa.js';
 import { h, clear } from './ui/dom.js';
 
 const params = new URLSearchParams(location.search);
@@ -44,49 +52,65 @@ const app = {
     fan: settings.startFan,
     manualValue: null,
   },
+  pwa: null,               // service worker state, set by registerServiceWorker below
   go, beginRoast, openDraft, finishRoastSession,
+  refreshSettings, replaceSettings, settingsChanged,
 };
+
+// ---- Settings ----
+// app.settings is one object for the life of the page: screens and the roast lifecycle hold
+// on to it, so changes are made in place rather than by swapping in a new object.
+
+// Settings that Setup copies into its form as starting values.
+const SETUP_DEFAULTS = { greenWeightG: 'greenWeightG', devTargetSec: 'devTargetSec', startHeat: 'heat', startFan: 'fan' };
+
+function replaceSettings(next) {
+  for (const k of Object.keys(settings)) delete settings[k];
+  Object.assign(settings, JSON.parse(JSON.stringify(next)));
+}
+
+// Re-read localStorage (after an import, which writes settings behind the screen's back).
+function refreshSettings() {
+  replaceSettings(loadSettings());
+  settingsChanged();
+}
+
+// Called after a setting changed. A changed default shows on Setup without a reload;
+// with no keys given, every default is copied.
+function settingsChanged(keys) {
+  const which = keys && keys.length ? keys : Object.keys(SETUP_DEFAULTS);
+  for (const k of which) if (SETUP_DEFAULTS[k]) app.setup[SETUP_DEFAULTS[k]] = settings[k];
+}
 
 // ---- Routing ----
 
-function stub(title) {
-  return (root) => {
-    root.append(h('div', { class: 'screen stub' },
-      h('header', { class: 'topbar' }, h('h1', null, title)),
-      h('section', { class: 'card' },
-        h('h2', null, 'Coming soon'),
-        h('p', { class: 'muted' }, `${title} is not built yet. Your roasts are saved on this phone.`)),
-      h('div', { class: 'stub-actions' },
-        h('a', { class: 'btn primary', href: '#setup', id: 'stub-back' }, 'Back'))));
-    return () => {};
-  };
-}
-
-// Other agents replace these entries (History list and detail, Settings).
+// Each mount function takes (root, app, param) and returns an unmount function.
 export const ROUTES = {
   setup: mountSetup,
   roast: mountRoast,
   after: mountAfter,
-  history: stub('History'),
-  settings: stub('Settings'),
+  history: (root, app, id) => (id ? mountDetail(root, app, id) : mountHistory(root, app)),
+  settings: mountSettings,
 };
 
 const root = document.getElementById('app');
 let unmount = null;
 
 function route() {
-  const asked = (location.hash || '#setup').slice(1).split('?')[0] || 'setup';
+  const [asked = 'setup', ...rest] = ((location.hash || '#setup').slice(1).split('?')[0] || 'setup').split('/');
+  let param = null;
+  try { param = rest.length ? decodeURIComponent(rest.join('/')) : null; } catch { param = null; }
   let target = asked in ROUTES ? asked : 'setup';
   const running = !!app.controller && app.controller.phase === 'running';
   if (running) target = 'roast';                       // a roast in progress owns the screen
   else if (target === 'roast') target = 'setup';
   if (target === 'after' && !app.record) target = 'setup';
-  if (target !== asked) history.replaceState(null, '', `#${target}`);
+  if (target !== asked) { history.replaceState(null, '', `#${target}`); param = null; }
   if (unmount) { try { unmount(); } catch (e) { console.warn(e); } unmount = null; }
   clear(root);
   window.scrollTo(0, 0);
   document.body.dataset.screen = target;
-  unmount = ROUTES[target](root, app) || null;
+  unmount = ROUTES[target](root, app, param) || null;
 }
 
 function go(name) {
@@ -166,4 +190,5 @@ window.__rt = {
   clearDraft,
 };
 
+registerServiceWorker(app);
 route();

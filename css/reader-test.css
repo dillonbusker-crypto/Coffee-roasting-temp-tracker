@@ -121,3 +121,4 @@ input::placeholder { color: var(--muted); }
 
 .zoomrow { margin: 0 0 4px; }
 .zoomrow .btn { min-height: 44px; flex: 0 1 auto; font-size: 14px; }
+.stage .handle[hidden] { display: none; }

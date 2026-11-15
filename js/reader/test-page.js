@@ -5,7 +5,7 @@ import { createCamera, createFrameLoop, grabCropFrom, expandBoxForDigits, clampB
 
 const $ = id => document.getElementById(id);
 const FPS = 4;
-const DEFAULT_BOX = { x: 0.52, y: 0.36, w: 0.3, h: 0.14 };
+const DEFAULT_BOX = { x: 0.08, y: 0.08, w: 0.25, h: 0.1 };
 
 // ---------- small helpers ----------
 
@@ -36,6 +36,7 @@ class BoxStage {
     root.addEventListener('pointermove', e => this.move(e));
     root.addEventListener('pointerup', e => this.up(e));
     root.addEventListener('pointercancel', e => this.up(e));
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => this.render()).observe(root);
     this.render();
   }
   setSourceSize(w, h) { this.sw = w; this.sh = h; this.root.style.aspectRatio = `${w} / ${h}`; this.render(); }
@@ -59,7 +60,13 @@ class BoxStage {
     const rb = expandBoxForDigits(b, this.sw, this.sh);
     Object.assign(this.extEl.style, { left: px(rb.x), top: py(b.y), width: pw(b.x - rb.x), height: pw(b.h) });
     const pos = { nw: [b.x, b.y], n: [b.x + b.w / 2, b.y], ne: [b.x + b.w, b.y], e: [b.x + b.w, b.y + b.h / 2], se: [b.x + b.w, b.y + b.h], s: [b.x + b.w / 2, b.y + b.h], sw: [b.x, b.y + b.h], w: [b.x, b.y + b.h / 2] };
-    for (const h of this.handles) { const p = pos[h.dataset.h]; h.style.left = px(p[0]); h.style.top = py(p[1]); }
+    // on a small box the handles would cover it: keep the corners (all four when the box is big enough to grab, one otherwise)
+    const r = this.root.getBoundingClientRect(), bwPx = b.w / v.s * r.width, bhPx = b.h / v.s * r.height, small = Math.min(bwPx, bhPx);
+    for (const h of this.handles) {
+      const p = pos[h.dataset.h], name = h.dataset.h;
+      h.style.left = px(p[0]); h.style.top = py(p[1]);
+      h.hidden = (small < 90 && name.length === 1) || (small < 44 && name !== 'se') || (r.width === 0);
+    }
   }
   pt(e) {
     const r = this.root.getBoundingClientRect(), v = this.view || { x: 0, y: 0, s: 1 };
@@ -97,6 +104,14 @@ class BoxStage {
 function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
 
 // ---------- reading + drawing ----------
+
+// The reader can start its search from where the digits were last found (hint), which is several times faster. The hint is only a
+// starting point; drop it after a run of misses so a changed box or lighting is searched afresh.
+function nextHint(tracker, res) {
+  if (res.debug.hintOut) { tracker.hint = res.debug.hintOut; tracker.misses = 0; }
+  else if (++tracker.misses >= 8) tracker.hint = null;
+  return tracker.hint;
+}
 
 function readBox(source, sw, sh, box, work, hint) {
   const rb = expandBoxForDigits(box, sw, sh);
@@ -306,8 +321,8 @@ function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;
 // VIDEO
 // ============================================================
 const vid = $('video-el');
-const videoStage = new BoxStage($('video-stage'), () => { if (!video.running) readVideoOnce(); });
-const video = { url: null, running: false, loop: null, tiles: [], filter: null, curSec: -1, secFrames: [], work: {}, hint: null, wrong: new Set() };
+const videoStage = new BoxStage($('video-stage'), () => { video.hint = null; if (!video.running) readVideoOnce(); });
+const video = { url: null, running: false, loop: null, tiles: [], filter: null, curSec: -1, secFrames: [], work: {}, hint: null, misses: 0, wrong: new Set() };
 
 $('video-file').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
@@ -362,7 +377,7 @@ function onVideoFrame(t) {
   if (video.curSec < 0) video.curSec = sec;
   while (video.curSec < sec) closeVideoSecond(); // a skipped second closes as missing
   const { imageData, res } = readBox(vid, vid.videoWidth, vid.videoHeight, videoStage.box, video.work, video.hint);
-  video.hint = res.debug.hintOut || video.hint;
+  nextHint(video, res);
   video.filter.addFrame(res);
   video.secFrames.push({ res, imageData });
   showResult('video', res);
@@ -407,6 +422,8 @@ function finishVideo(completed) {
 }
 
 function updateVideoSummary(final) {
+  if (final) video.finished = true; else if (video.running) video.finished = false;
+  final = video.finished;
   const total = video.tiles.length, read = video.tiles.filter(t => t.value !== null).length;
   const wrong = video.wrong.size, missed = total - read, correct = read - wrong;
   const pct = total ? (correct / total) * 100 : 0;
@@ -427,8 +444,8 @@ function updateVideoSummary(final) {
 // ============================================================
 let liveCam = null;
 const liveVideo = $('live-video');
-const liveStage = new BoxStage($('live-stage'), b => { if (liveCam) liveCam.setBox(b); });
-const live = { hint: null };
+const liveStage = new BoxStage($('live-stage'), b => { if (liveCam) liveCam.setBox(b); live.hint = null; });
+const live = { hint: null, misses: 0 };
 
 $('live-start').addEventListener('click', async () => {
   if (liveCam) return;
@@ -470,7 +487,7 @@ function updateLiveCamInfo() {
 let lastLiveDraw = 0;
 function onLiveFrame(imageData) {
   const res = readDisplay(imageData, { hint: live.hint });
-  live.hint = res.debug.hintOut || live.hint;
+  nextHint(live, res);
   if (soak.running) soak.filter.addFrame(res);
   const now = performance.now();
   showResult('live', res);
@@ -505,8 +522,8 @@ $('soak-start').addEventListener('click', async () => {
   if (!(minutes > 0)) { msg('Enter a duration in minutes.', 'error'); return; }
   msg('');
   Object.assign(soak, { running: true, filter: createReadingFilter(), durationS: Math.round(minutes * 60), tick: 0, log: [], events: [], wl: null, wlState: 'not requested', wlReleased: 0, hidden: 0 });
-  liveCam.stats; // (stats object is a copy; stalls are counted against the baseline below)
   soak.stallBase = liveCam.stats.stalls; soak.longestBase = liveCam.stats.longestStallMs;
+  soak.startMs = performance.now();
   $('soak-report').hidden = true; $('soak-strip').textContent = ''; $('soak-progress').hidden = false;
   $('soak-start').disabled = true; $('soak-stop').disabled = false;
   const warn = $('soak-wl-warn');
@@ -515,7 +532,6 @@ $('soak-start').addEventListener('click', async () => {
     warn.textContent = 'Screen Wake Lock is not supported in this browser. Without it the screen may dim or lock during a roast and the camera will stop. The soak test still runs and records whether the page was hidden. (Safari needs iOS 16.4 or later.)';
     warn.hidden = false;
   } else { warn.hidden = true; await requestWakeLock(false); if (soak.wlState.startsWith('request failed')) { warn.textContent = 'The browser refused the wake lock (' + soak.wlState + '). The test continues without it.'; warn.hidden = false; } }
-  soak.startMs = performance.now();
   soak.timer = setInterval(soakTick, 250);
 });
 $('soak-stop').addEventListener('click', () => stopSoak('stopped by user'));
@@ -533,11 +549,12 @@ function soakTick() {
   const h = soak.filter.health();
   const stalls = liveCam ? liveCam.stats.stalls - soak.stallBase : 0;
   $('soak-stats').innerHTML = stat('elapsed', `${fmtTime(Math.min(el, soak.durationS))} / ${fmtTime(soak.durationS)}`) + stat('read', h.secondsRead, 'good') + stat('rejected', h.rejected, h.rejected ? 'warn' : '') +
-    stat('missing', h.secondsMissing, h.secondsMissing ? 'warn' : '') + stat('wake lock', soak.wlState.split(' ')[0], soak.wlState.startsWith('held') ? 'good' : 'warn') + stat('stalls', stalls, stalls ? 'bad' : 'good');
+    stat('missing', h.secondsMissing, h.secondsMissing ? 'warn' : '') + stat('wake lock', wlShort(), soak.wlState.startsWith('held') ? 'good' : 'warn') + stat('stalls', stalls, stalls ? 'bad' : 'good');
   $('soak-bar').style.width = Math.min(100, (el / soak.durationS) * 100) + '%';
   if (soak.tick >= soak.durationS) stopSoak('completed');
 }
 function el_(tag, cls) { return el(tag, cls); }
+function wlShort() { const w = soak.wlState; return w.startsWith('held') ? 'held' : w.startsWith('request failed') ? 'refused' : w === 'unsupported' ? 'unsupported' : w; }
 
 async function stopSoak(why) {
   if (!soak.running) return;

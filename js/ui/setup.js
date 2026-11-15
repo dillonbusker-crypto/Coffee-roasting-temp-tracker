@@ -6,6 +6,7 @@ import { listRoasts, findReference, normalizeName } from '../store/db.js';
 import { referenceTargets } from '../core/session.js';
 import { formatTemp, formatClock } from '../core/units.js';
 import { loadDraft, clearDraft } from './draft.js';
+import { updateNotice } from './pwa.js';
 
 const DEBOUNCE_MS = 150;
 
@@ -90,6 +91,8 @@ export function mountSetup(root, app) {
   el.start = h('button', { type: 'button', class: 'btn primary start-btn', id: 'start-btn', onClick: onStart }, 'Start roast');
   el.error = h('p', { class: 'error-line', id: 'start-error', role: 'alert' }, '');
 
+  const notice = updateNotice(app);
+
   const wakeWarn = app.wake.supported ? null : h('div', { class: 'card warn-card', id: 'wake-warning' },
     h('strong', null, 'This browser can’t keep the screen awake.'),
     h('p', null, 'Turn Auto-Lock off in Settings, Display & Brightness before the roast, or the phone may lock mid-roast.'));
@@ -101,6 +104,7 @@ export function mountSetup(root, app) {
         h('nav', { class: 'topnav' },
           h('a', { class: 'navlink', href: '#history', id: 'nav-history' }, 'History'),
           h('a', { class: 'navlink', href: '#settings', id: 'nav-settings' }, 'Settings'))),
+      notice.el,
       el.draft,
       h('section', { class: 'card' },
         h('h2', null, 'Temperature source'),
@@ -377,6 +381,7 @@ export function mountSetup(root, app) {
 
   return function unmount() {
     disposed = true;
+    notice.dispose();
     clearInterval(pollTimer);
     clearTimeout(refTimer);
     stopPreview();

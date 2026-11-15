@@ -5,6 +5,7 @@
   "description": "Phone web app that reads a thermometer by camera during a coffee roast",
   "scripts": {
     "test": "node --test \"test/unit/*.test.js\"",
-    "serve": "python3 -m http.server 8080"
+    "serve": "python3 -m http.server 8080",
+    "precache": "node tools/build-precache.mjs"
   }
 }

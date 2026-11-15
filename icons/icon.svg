@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Roast Tracker">
+  <rect width="512" height="512" fill="#0f1115"/>
+  <g id="mark" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M96 396 H430" stroke="#2e333d" stroke-width="10"/>
+    <path d="M96 396 V112" stroke="#2e333d" stroke-width="10"/>
+    <path d="M110 372 C158 250 200 168 290 138 S386 118 424 120" stroke="#ffb454" stroke-width="30"/>
+    <circle cx="424" cy="120" r="24" fill="#ffb454" stroke="none"/>
+  </g>
+</svg>

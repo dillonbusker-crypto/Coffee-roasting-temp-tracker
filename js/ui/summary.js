@@ -30,7 +30,8 @@ function controlLog(controls) {
   return parts.join(', ');
 }
 
-export function renderRoastSummary(container, record, { units = 'F', reference = null } = {}) {
+// logLine: false leaves out the plain-text heat and fan log (screens with a log editor show it themselves).
+export function renderRoastSummary(container, record, { units = 'F', reference = null, logLine = true } = {}) {
   const r = record.results || {};
   const ev = record.events || {};
   const phases = r.phases || {};
@@ -64,7 +65,7 @@ export function renderRoastSummary(container, record, { units = 'F', reference =
     row('Read', `${rd.secondsRead ?? 0} s`, 'sum-read'),
     row('Rejected', String(rd.rejected ?? 0), 'sum-rejected'),
     row('Missing', `${rd.secondsMissing ?? 0} s`, 'sum-missing'),
-    h('p', { class: 'muted small' }, log ? `Heat and fan log: ${log}.` : ''));
+    logLine ? h('p', { class: 'muted small' }, log ? `Heat and fan log: ${log}.` : '') : null);
 
   const canvas = h('canvas', { id: 'summary-chart', 'aria-label': 'Roast chart' });
   const wrap = h('div', { class: 'chart-wrap summary-chart' }, canvas);

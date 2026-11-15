@@ -98,6 +98,28 @@ export async function saveRoast(roast) {
   return roast;
 }
 
+// Pure part of updateRoast: a shallow merge of `patch` into the stored roast. The id never
+// changes, and the reference flags are left to setReference(), which keeps them unique.
+export function mergeRoastPatch(current, patch) {
+  const { id: _id, reference: _reference, ...rest } = patch || {};
+  return { ...current, ...rest };
+}
+
+// Read-modify-write of one roast in a single transaction, so an edit made from a screen that
+// holds an older copy (for example, the detail page) never overwrites newer reference flags.
+export async function updateRoast(id, patch) {
+  const { tx, os } = await store('roasts', 'readwrite');
+  const current = await wrap(os.get(id));
+  if (!current) {
+    tx.abort();
+    throw new Error(`No roast with id ${id}`);
+  }
+  const next = mergeRoastPatch(current, patch);
+  os.put(next);
+  await done(tx);
+  return next;
+}
+
 export async function getRoast(id) {
   const { os } = await store('roasts');
   return (await wrap(os.get(id))) ?? null;

@@ -34,6 +34,17 @@ export function formatTemp(f, units = 'F', { digits, unit = true } = {}) {
   return v.toFixed(d) + (unit ? unitLabel(units) : '');
 }
 
+// A temperature difference (°F) in the display unit: scale only, no offset.
+// formatDelta(15) -> "15°F"; formatDelta(15, 'C') -> "8°C". Unsigned unless sign is set.
+export function formatDelta(df, units = 'F', { digits = 0, unit = true, sign = false } = {}) {
+  const v = rateToUnit(df, units);
+  if (v === null) return '—';
+  const s = v.toFixed(digits);
+  const zero = Number(s) === 0;
+  const signed = sign && v > 0 && !zero ? '+' + s : (zero ? s.replace('-', '') : s);
+  return signed + (unit ? unitLabel(units) : '');
+}
+
 // formatRate(35.2) -> "+35°F/min"
 export function formatRate(r, units = 'F', { digits = 0, unit = true, sign = true } = {}) {
   const v = rateToUnit(r, units);

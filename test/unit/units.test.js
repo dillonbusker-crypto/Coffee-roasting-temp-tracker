@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fToC, cToF, rateFToC, rateCToF, formatTemp, formatRate, formatClock, tempFromUnit } from '../../js/core/units.js';
+import { fToC, cToF, rateFToC, rateCToF, formatTemp, formatRate, formatDelta, formatClock, tempFromUnit } from '../../js/core/units.js';
 
 test('temperature conversion', () => {
   assert.equal(fToC(32), 0);
@@ -27,4 +27,16 @@ test('formatting', () => {
   assert.equal(formatClock(9), '0:09');
   assert.equal(formatClock(null), '—');
   assert.ok(Math.abs(tempFromUnit(210, 'C') - 410) < 1e-9);
+});
+
+test('a temperature difference converts by 5/9 with no offset', () => {
+  assert.equal(formatDelta(15), '15°F');
+  assert.equal(formatDelta(15, 'C'), '8°C');
+  assert.equal(formatDelta(15, 'C', { digits: 1 }), '8.3°C');
+  assert.equal(formatDelta(18, 'C', { unit: false }), '10');
+  assert.equal(formatDelta(0, 'C'), '0°C');
+  assert.equal(formatDelta(-9, 'C', { sign: true }), '-5°C');
+  assert.equal(formatDelta(9, 'F', { sign: true }), '+9°F');
+  assert.equal(formatDelta(-0.2, 'F'), '0°F');
+  assert.equal(formatDelta(null, 'C'), '—');
 });

@@ -358,6 +358,28 @@ textarea.field-input { padding: 12px 14px; min-height: 110px; resize: none; line
 .detail #detail-body > .after-actions { margin-top: 14px; }
 .field-label + .field-input.notes { margin-top: 0; }
 
+/* ---- Roast review ---- */
+
+.review-card h2 { margin-bottom: 8px; }
+.review-headline { margin-top: 0; font-weight: 600; font-size: 16px; }
+.review-headline[data-kind="none"] { color: var(--muted); }
+.review-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.review-item { padding: 10px 0; border-top: 1px solid var(--hair); }
+.review-item:first-child { border-top: 0; padding-top: 4px; }
+.review-item:last-child { padding-bottom: 0; }
+.review-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.review-title { font-size: 16px; line-height: 22px; }
+.review-text { margin-top: 3px; font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; }
+.review-text .nb { white-space: nowrap; }
+.review-item[data-status="info"] .review-title, .review-item[data-status="info"] .review-text { color: var(--muted); }
+.rv-chip {
+  display: inline-block; flex: none; padding: 1px 9px; border-radius: 999px; border: 1px solid;
+  font-size: 12px; font-weight: 700; line-height: 18px; white-space: nowrap;
+}
+.rv-chip[data-status="good"] { color: var(--good); border-color: rgba(74, 222, 128, 0.55); background: rgba(74, 222, 128, 0.1); }
+.rv-chip[data-status="close"] { color: var(--warn); border-color: rgba(251, 191, 36, 0.55); background: rgba(251, 191, 36, 0.1); }
+.rv-chip[data-status="off"] { color: var(--alert); border-color: rgba(248, 113, 113, 0.6); background: rgba(248, 113, 113, 0.1); }
+
 /* ---- Heat and fan log editor ---- */
 
 .log-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 10px; }

@@ -2,7 +2,7 @@
 // reader health, and the full chart with its heat/fan strip and cue markers. Built from a
 // saved roast record, so the After screen and the History detail screen share it.
 //
-//   const view = renderRoastSummary(container, record, { units, reference });
+//   const view = renderRoastSummary(container, record, { units, reference, slot });
 //   view.setReference(referenceSeries)   // optionally add the reference curve later
 //   view.destroy();
 
@@ -31,7 +31,9 @@ function controlLog(controls) {
 }
 
 // logLine: false leaves out the plain-text heat and fan log (screens with a log editor show it themselves).
-export function renderRoastSummary(container, record, { units = 'F', reference = null, logLine = true } = {}) {
+// slot: an element to place between the chart and the event/phase/reader details (the Roast review card).
+// It is moved, not copied, so it survives a re-render.
+export function renderRoastSummary(container, record, { units = 'F', reference = null, logLine = true, slot = null } = {}) {
   const r = record.results || {};
   const ev = record.events || {};
   const phases = r.phases || {};
@@ -71,7 +73,7 @@ export function renderRoastSummary(container, record, { units = 'F', reference =
   const wrap = h('div', { class: 'chart-wrap summary-chart' }, canvas);
 
   clear(container);
-  container.append(h('div', { class: 'summary' }, tiles, wrap, events, phaseGroup, health));
+  container.append(h('div', { class: 'summary' }, tiles, wrap, slot, events, phaseGroup, health));
 
   const chart = createChart(canvas);
   let refSeries = reference;

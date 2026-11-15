@@ -5,6 +5,7 @@
 
 import { h, clear, setText, setAttr, confirmSheet } from './dom.js';
 import { renderRoastSummary } from './summary.js';
+import { renderRoastReview, resolveReviewReference } from './review.js';
 import { referenceFromRecord } from './chart-model.js';
 import { createControlLogEditor } from './control-log-editor.js';
 import { switchRow, scoreRow, referenceTags, lossBand, fmtDateAndTime, createToast } from './controls.js';
@@ -22,6 +23,8 @@ export function mountDetail(root, app, id) {
   let record = null;
   let refSeries = null;
   let summary = null;
+  let review = null;
+  let reviewHost = null;
   let editor = null;
   let disposed = false;
   let deleted = false;
@@ -58,6 +61,7 @@ export function mountDetail(root, app, id) {
     setStatus('Saving…');
     const p = queue.then(() => updateRoast(id, patch)).then((next) => {
       record = next;
+      if (review && !disposed) review.update(record);
       if (!disposed) {
         setStatus(`Saved at ${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`, 'good');
         flash();
@@ -73,6 +77,16 @@ export function mountDetail(root, app, id) {
 
   // ---- Header and summary ----
 
+  // Redraws the Roast review from the current record. With `again`, looks the comparison roast up
+  // afresh first (the reference flags changed, so this roast may now be, or no longer be, it).
+  async function refreshReview(again = false) {
+    if (!review) return;
+    review.update(record);
+    if (!again) return;
+    const ref = await resolveReviewReference(record);
+    if (!disposed) review.setReference(ref);
+  }
+
   function renderHead() {
     setText(el.title, record.coffee || 'Untitled');
     setText(el.sub, `${fmtDateAndTime(record.startedAt)} · ${record.greenWeightG ?? '—'} g green`);
@@ -82,7 +96,7 @@ export function mountDetail(root, app, id) {
 
   function renderSummary(host) {
     if (summary) summary.destroy();
-    summary = renderRoastSummary(host, record, { units, reference: refSeries, logLine: false });
+    summary = renderRoastSummary(host, record, { units, reference: refSeries, logLine: false, slot: reviewHost });
     app.activeChart = summary.chart;   // test hook: the chart model is readable
   }
 
@@ -112,7 +126,9 @@ export function mountDetail(root, app, id) {
       placeholder: 'For example, 79.9',
       onInput: (e) => {
         const w = parse(e.target.value);
-        showLoss(w != null && w > 0 ? weightLossPct(record.greenWeightG, w) : null);
+        const loss = w != null && w > 0 ? weightLossPct(record.greenWeightG, w) : null;
+        showLoss(loss);
+        if (review) review.update({ ...record, roastedWeightG: loss == null ? null : w, weightLossPct: loss });
       },
       onChange: (e) => {
         const w = parse(e.target.value);
@@ -191,6 +207,7 @@ export function mountDetail(root, app, id) {
         coffee.set(!!record.reference?.coffee);
         general.set(!!record.reference?.general);
         renderHead();
+        refreshReview(true);
         setStatus('Saved', 'good');
         flash();
       } catch (err) {
@@ -209,6 +226,7 @@ export function mountDetail(root, app, id) {
       onChange: async (controls) => {
         record = { ...record, controls };
         renderSummary(summaryHost);
+        refreshReview();
         await persist({ controls });
       },
     });
@@ -283,8 +301,11 @@ export function mountDetail(root, app, id) {
     }
     renderHead();
     const summaryHost = h('div', { id: 'summary-host' });
+    reviewHost = h('div', { id: 'review-host' });
+    review = renderRoastReview(reviewHost, record, { units, settings });
     el.body.append(summaryHost, buildReview(), buildReference(), buildLog(summaryHost), buildActions());
     renderSummary(summaryHost);
+    refreshReview(true);
   }
 
   load();

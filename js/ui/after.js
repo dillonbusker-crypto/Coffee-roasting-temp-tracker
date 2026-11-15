@@ -2,6 +2,7 @@
 
 import { h, setText, setAttr, confirmSheet, fmtDateTime } from './dom.js';
 import { renderRoastSummary } from './summary.js';
+import { renderRoastReview, resolveReviewReference } from './review.js';
 import { referenceFromRecord } from './chart-model.js';
 import { weightLossPct } from '../core/calc.js';
 import { saveRoast, setReference, getRoast } from '../store/db.js';
@@ -40,7 +41,14 @@ export function mountAfter(root, app) {
   const lossBig = h('div', { class: 'loss-big', id: 'loss-big' }, '—');
   const lossNote = h('div', { class: 'loss-note', id: 'loss-text', 'data-band': 'none' }, 'Enter the roasted weight to see weight loss.');
 
+  // The record as it would be saved now: the typed weight is not in `record` until Save.
+  function reviewRecord() {
+    const w = form.weight != null && form.weight > 0 ? form.weight : null;
+    return { ...record, roastedWeightG: w, weightLossPct: w == null ? null : weightLossPct(record.greenWeightG, w) };
+  }
+
   function renderLoss() {
+    review.update(reviewRecord());
     const loss = form.weight != null && form.weight > 0 ? weightLossPct(record.greenWeightG, form.weight) : null;
     if (loss == null) {
       setText(lossBig, '—');
@@ -94,6 +102,7 @@ export function mountAfter(root, app) {
       record = { ...record, controls };
       app.record = record;
       drawSummary();
+      review.update(reviewRecord());
     },
   });
 
@@ -125,10 +134,15 @@ export function mountAfter(root, app) {
       refCoffee, refGeneral),
     h('div', { class: 'after-actions' }, error, saveBtn, discardBtn)));
 
+  // The Roast review card sits inside the summary, between the chart and the detail groups.
+  const reviewHost = h('div', { id: 'review-host' });
+  const review = renderRoastReview(reviewHost, reviewRecord(), { units, settings });
+  resolveReviewReference(record).then((ref) => { if (!disposed) review.setReference(ref); });
+
   let refSeries = null;
   function drawSummary() {
     if (summary) summary.destroy();
-    summary = renderRoastSummary(summaryHost, record, { units, reference: refSeries, logLine: false });
+    summary = renderRoastSummary(summaryHost, record, { units, reference: refSeries, logLine: false, slot: reviewHost });
     app.activeChart = summary.chart;   // test hook: the chart model is readable
   }
   drawSummary();

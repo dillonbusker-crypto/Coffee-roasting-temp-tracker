@@ -13,7 +13,7 @@
 
 import { analyzeSeries, smoothSeries, weightLossPct } from './calc.js';
 import { DEFAULTS } from './settings.js';
-import { formatClock, formatDelta, formatRate } from './units.js';
+import { formatClock, formatDelta, formatRate, rateToUnit, tempToUnit } from './units.js';
 
 // ---- Thresholds that are not settings ----
 const DEV_GOOD_SEC = 5;          // development within this of the target is on target
@@ -21,6 +21,7 @@ const DEV_CLOSE_SEC = 10;        // ... and within this is close
 const TOTAL_GOOD_SEC = 30;       // total time within this of the target is on target
 const TOTAL_CLOSE_SEC = 60;      // ... and within this is close
 const LOSS_CLOSE_POINTS = 0.5;   // weight loss this many points outside the band is close
+const END_TEMP_GRACE_F = 2;      // the end-temperature cue fires at the cap and the user needs a moment: this far over is still on target
 const END_TEMP_CLOSE_F = 5;      // end temperature this many °F over the cap is close
 const CRASH_SPAN_SEC = 30;       // a crash is a fall of the rate of rise over this long ...
 const CRASH_FRACTION = 0.35;     // ... by more than this share of its earlier value ...
@@ -154,18 +155,24 @@ function endTempItem(fcF, dropF, S, units) {
   if (!isNum(fcF) || !isNum(dropF)) {
     return item('endTemp', 'info', 'The First crack or Drop temperature is missing, so end temperature can\'t be judged.');
   }
-  // The probe reads whole degrees, so judge the rise to the nearest degree: a rise of 15.3 against
-  // a 15 cap shows as 15 and should not read as over.
-  const rise = Math.round(dropF - fcF);
+  // Work from the temperatures as the app shows them (whole °F, or °C to one decimal) so the
+  // arithmetic matches the Events list, and compare with limits converted and rounded the same
+  // way they are displayed.
+  const digits = units === 'C' ? 1 : 0;
+  const shownTemp = (f) => Number(tempToUnit(f, units).toFixed(digits));
+  const shownDelta = (df) => Math.round(rateToUnit(df, units));
+  const rise = Math.round(shownTemp(dropF) - shownTemp(fcF));
   const cap = S.endTempCapF;
+  const capLimit = shownDelta(cap);
+  const graceLimit = shownDelta(cap + END_TEMP_GRACE_F);
+  const closeLimit = shownDelta(cap + END_TEMP_CLOSE_F);
   const capText = formatDelta(cap, units);
-  const status = rise <= cap ? 'good' : rise <= cap + END_TEMP_CLOSE_F ? 'close' : 'off';
-  const amount = formatDelta(Math.abs(rise), units);
+  const amount = `${Math.abs(rise)}${units === 'C' ? '°C' : '°F'}`;
   const dir = rise < 0 ? 'below' : 'above';
-  const text = status === 'good'
-    ? `Dropped ${amount} ${dir} the first-crack reading, inside the ${capText} cap.`
-    : `Dropped ${amount} ${dir} the first-crack reading; the cap is ${capText}.`;
-  return item('endTemp', status, text);
+  const lead = `Dropped ${amount} ${dir} the first-crack reading`;
+  if (rise <= capLimit) return item('endTemp', 'good', `${lead}, inside the ${capText} cap.`);
+  if (rise <= graceLimit) return item('endTemp', 'good', `${lead}, at the ${capText} cap.`);
+  return item('endTemp', rise <= closeLimit ? 'close' : 'off', `${lead}; the cap is ${capText}.`);
 }
 
 // ---- 6: shape of the rate of rise ----

@@ -1,6 +1,6 @@
 # Roast Tracker: build status
 
-Last updated: Nov 15, 2026, 06:25 UTC. This file is the hand-off log. Update it whenever a milestone lands.
+Last updated: Nov 15, 2026, 07:20 UTC. This file is the hand-off log. Update it whenever a milestone lands.
 
 ## Where things are
 
@@ -14,13 +14,14 @@ Last updated: Nov 15, 2026, 06:25 UTC. This file is the hand-off log. Update it 
 | Digit reader and test page (`js/reader`, `reader-test.html`, `tools/synth-display.js`, `test/browser/reader.test.cjs`) | 1 | Built and reviewed, provisional until the user's media has run. `test/browser/reader.test.cjs` passes: 12 of 12 real crops, 0 wrong in 600 jittered real reads, 0 wrong in the synthetic sets, 60 of 60 seconds on the mild synthetic video. Known weak spot: 1 of 250 forced mid-change frames at moderate distortion read wrong (77→78 read as 79); the per-second filter is the backstop |
 | History, roast detail, Settings, export/import UI, offline install (`js/ui/history.js`, `detail.js`, `settings-screen.js`, `sw.js`, `manifest.webmanifest`, `icons/`) | 5 | Done and reviewed. `test/browser/history-settings.test.cjs` passes |
 | Camera in the roast screen (camera source, Setup preview and box, crop strip on the Roast screen) | 4 | Built and reviewed against a fake camera. `test/browser/camera.test.cjs` passes: 34 of 34 seconds read with 0 wrong on a synthetic climb through 99→100, lost-reading and number-pad fallback, dead-stream recovery. Untested on a real iPhone |
+| Roast review: after-roast checks against the roast's own targets (`js/core/review.js`, `js/ui/review.js`) | Added after the spec | Built and reviewed. `test/browser/review.test.cjs` passes. Rate-of-rise shape thresholds are tuned on simulated curves only |
 | Field test: three real roasts | 6 | The user's, once the camera works |
 
 ## Pending, in order
 
 1. **First run on the iPhone.** Open the live site in Safari, allow the camera, and check the list under "Check on the real phone" below.
 2. **Run the user's test media through the reader.** About 10 photos and a 1-minute video, due Nov 16. Step 1 stays provisional until they meet the spec's accuracy target. Add them to `test/fixtures/` as regression cases. The reader has only seen the digits 0, 1, 2, 4, 5, 6, 7 and the dashes on the real display; check how a real 3, 8 and 9 are drawn (a 9 without its bottom bar would be missed, not misread).
-3. **Field test and tuning.** Replace the provisional 410°F first-crack reading with the first logged roast. Tune pace-cue timing against real curves.
+3. **Field test and tuning.** Replace the provisional 410°F first-crack reading with the first logged roast. Tune pace-cue timing against real curves. Check the roast review's rate-of-rise findings against real roasts: a normal first-crack bump may read as a "flick", noisy readings may read as a "crash", and a slow first minute may read as a stall. The thresholds are named constants at the top of `js/core/review.js`.
 
 ## Check on the real phone
 
@@ -51,6 +52,7 @@ Both are described in `docs/DESIGN.md`.
 npm test                                  # unit tests
 node test/browser/app-flow.test.cjs       # full roast flow in headless Chromium
 node test/browser/history-settings.test.cjs   # history, settings, export/import, offline
+node test/browser/review.test.cjs         # roast review
 node test/browser/reader.test.cjs         # digit reader (about 3 minutes)
 node test/browser/camera.test.cjs         # camera source against a fake camera (about 3 minutes)
 npm run precache                          # regenerate the offline file list in sw.js after changing shipped files

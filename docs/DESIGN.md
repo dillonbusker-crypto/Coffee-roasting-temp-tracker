@@ -22,6 +22,7 @@ js/core/calc.js            pure maths
 js/core/session.js         one roast in progress
 js/core/clock.js           1 Hz tick with catch-up and speed
 js/core/cues.js            cue engine (pure)
+js/core/review.js          after-roast review (pure)
 js/core/settings.js        defaults, load, save
 js/core/units.js           °F/°C formatting
 js/reader/sevenseg.js      ImageData -> digits (pure)
@@ -150,6 +151,20 @@ Ids: `hot`, `slow`, `stall`, `rorClimb`, `fcSoon`, `fanPrompt`, `dev15`, `dropNo
 - `rorClimb` is held back for 45 s after a logged heat increase or fan decrease, since the user caused that climb.
 - The same corrective cue does not repeat within 40 s. The spec's 20 s limit between any two corrective cues still applies, and a logged heat or fan change restarts it.
 - `dropNow`, `endTemp` and `lost` are `critical` and ignore the limit. `lost` re-arms once a reading is accepted.
+
+### `js/core/review.js` (pure)
+
+```js
+reviewRoast(roast, { reference, units, settings }) ->
+  { headline, counts: { good, close, off }, items: [{ id, status, title, text, t? }] }
+```
+
+An addition to the spec: a review of a finished roast, shown on the After screen and the roast detail page. It is computed from the saved record each time and never stored. Item ids, in order: `weightLoss`, `firstCrack`, `development`, `totalTime`, `endTemp`, `rorShape`, `reference`, `reader`, `cues`. Status is `good`, `close`, `off` or `info` (a fact, not judged).
+
+- Targets come from the settings saved with the roast, so the review judges a roast against what was in effect when it ran.
+- `rorShape` looks for a stall, a climb (called a flick after First crack) and a crash near First crack, and credits a finding to a heat or fan change logged in the 45 s before it. It declines to judge manual roasts, roasts with more than 15% gaps and roasts under 90 s.
+- `endTemp` uses the whole-degree temperatures shown on screen, and allows 2°F over the cap as on target, because the live cue fires at the cap and the user needs a moment to react.
+- Tolerances that are not settings are named constants at the top of the module.
 
 ### `js/store/db.js`
 

@@ -127,15 +127,37 @@ test('totalTime: within 30 s good, within 60 s close, beyond off', () => {
   assert.equal(at(390).text, 'Total time 6:30, on the 6:30 target.');
 });
 
-test('endTemp: at or under the cap good, up to 5°F over close, beyond off', () => {
-  const at = (dropF) => find(reviewRoast(make({ fc: 300, drop: 355, fcF: 410, dropF })), 'endTemp');
-  for (const f of [415, 400, 425]) assert.equal(at(f).status, 'good', `drop ${f}`);
-  for (const f of [426, 430]) assert.equal(at(f).status, 'close', `drop ${f}`);
-  for (const f of [431, 450]) assert.equal(at(f).status, 'off', `drop ${f}`);
+test('endTemp: at the cap or up to 2°F over good, up to 5°F over close, beyond off', () => {
+  const at = (dropF, fcF = 410, units = 'F') => find(reviewRoast(make({ fc: 300, drop: 355, fcF, dropF }), { units }), 'endTemp');
+  for (const f of [400, 415, 424]) assert.equal(at(f).status, 'good', `rise ${f - 410}`);
+  assert.equal(at(425).status, 'good');                // cap
+  assert.equal(at(427).status, 'good');                // cap + 2
+  assert.equal(at(428).status, 'close');               // cap + 3
+  assert.equal(at(430).status, 'close');               // cap + 5
+  assert.equal(at(431).status, 'off');                 // cap + 6
+  assert.equal(at(450).status, 'off');
+  assert.equal(at(424).text, 'Dropped 14°F above the first-crack reading, inside the 15°F cap.');
+  assert.equal(at(425).text, 'Dropped 15°F above the first-crack reading, inside the 15°F cap.');
+  assert.equal(at(426).text, 'Dropped 16°F above the first-crack reading, at the 15°F cap.');
+  assert.equal(at(427).text, 'Dropped 17°F above the first-crack reading, at the 15°F cap.');
   assert.equal(at(443).text, 'Dropped 33°F above the first-crack reading; the cap is 15°F.');
-  assert.equal(at(420).text, 'Dropped 10°F above the first-crack reading, inside the 15°F cap.');
-  // the probe reads whole degrees: 15.4 over a 15 cap is 15
-  assert.equal(find(reviewRoast(make({ fc: 300, drop: 355, fcF: 410.2, dropF: 425.6 })), 'endTemp').status, 'good');
+  assert.equal(at(400).text, 'Dropped 10°F below the first-crack reading, inside the 15°F cap.');
+  // The arithmetic uses the whole degrees the app shows: 408.4 and 423.6 are shown as 408 and 424, a rise of 16 (not 15.2).
+  assert.equal(at(423.6, 408.4).text, 'Dropped 16°F above the first-crack reading, at the 15°F cap.');
+  // and 409.6 / 424.4 show as 410 and 424, a rise of 14 (not 14.8 rounded to 15)
+  assert.equal(at(424.4, 409.6).text, 'Dropped 14°F above the first-crack reading, inside the 15°F cap.');
+});
+
+test('endTemp in °C: the rise comes from the °C values shown, against limits converted and rounded as shown', () => {
+  const at = (fcF, dropF) => find(reviewRoast(make({ fc: 300, drop: 355, fcF, dropF }), { units: 'C' }), 'endTemp');
+  // 410°F = 210.0°C; 425°F = 218.3°C: rise 8 against a cap of 8
+  assert.equal(at(410, 425).text, 'Dropped 8°C above the first-crack reading, inside the 8°C cap.');
+  assert.equal(at(410, 425).status, 'good');
+  assert.equal(at(410, 427).status, 'good');           // 219.4 - 210.0 = 9.4 -> 9, grace limit 9
+  assert.match(at(410, 427).text, /at the 8°C cap\.$/);
+  assert.equal(at(410, 430).status, 'close');          // 221.1 - 210 = 11.1 -> 11, close limit 11
+  assert.equal(at(410, 431).status, 'off');            // 12
+  assert.equal(at(410, 443).text, 'Dropped 18°C above the first-crack reading; the cap is 8°C.');
 });
 
 test('items 1 to 5 come in the fixed order, then shape, reference, reader, cues', () => {

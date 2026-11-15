@@ -343,7 +343,7 @@ async function main() {
 
       await page2.goto(`${base}/index.html?nosw#history/${encodeURIComponent(rA.id)}`);
       await page2.waitForSelector('#review-endTemp');
-      assert.match(row(await readReview(page2), 'endTemp').text, /^Dropped \d+°C above the first-crack reading, inside the 8°C cap\.$/);
+      assert.match(row(await readReview(page2), 'endTemp').text, /^Dropped \d+°C above the first-crack reading, (inside|at) the 8°C cap\.$/);
     }
     finish('detail', errors2);
     finish('first page', A.errors);

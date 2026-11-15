@@ -338,8 +338,8 @@ textarea.field-input { padding: 12px 14px; min-height: 110px; resize: none; line
 .hist-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .hist-coffee { font-size: 19px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hist-date { margin-top: 1px; font-variant-numeric: tabular-nums; }
-.hist-stats { display: grid; grid-template-columns: 1.1fr 1.25fr 1.1fr 0.8fr; gap: 6px; margin-top: 10px; }
-.stat { background: var(--raised); border-radius: 10px; padding: 6px 6px 7px 8px; min-width: 0; border: 1px solid transparent; }
+.hist-stats { display: grid; grid-template-columns: repeat(4, minmax(max-content, 1fr)); gap: 5px; margin-top: 10px; }
+.stat { background: var(--raised); border-radius: 10px; padding: 6px 7px 7px 8px; min-width: 0; border: 1px solid transparent; }
 .stat-label { display: block; font-size: 12px; line-height: 15px; color: var(--muted); white-space: nowrap; }
 .stat-value { display: block; font-size: 20px; line-height: 24px; font-variant-numeric: tabular-nums; }
 .stat[data-flag] { border-color: rgba(251, 191, 36, 0.55); }
@@ -412,3 +412,8 @@ textarea.field-input { padding: 12px 14px; min-height: 110px; resize: none; line
 .settings #settings-intro { margin: 2px 2px 0; }
 .settings #settings-error { margin-top: 8px; }
 .group-body > .btn, .group-body > a.btn { margin-top: 0; }
+#units-card .segmented { margin-top: 2px; }
+#units-card p { margin-top: 10px; }
+.group-body > p + .switch-row { margin-top: 12px; }
+#about-version { margin-top: 10px; }
+#reset-msg:not(:empty) { margin-top: 8px; }

@@ -101,3 +101,33 @@ export function preprocess(img, opts = {}) {
   for (let i = 0; i < ink.length; i++) { const v = (hi - ratio[i]) / (hi - lo); ink[i] = v < 0 ? 0 : v > 1 ? 1 : v; }
   return { w, h, scale, ink, ratio, contrast, gray: g };
 }
+
+// ---------- slant ----------
+
+// Shear a plane horizontally: row y moves right by (y - h/2) * t (+ pad). t > 0 straightens right-leaning italics.
+export function shear(src, w, h, t) {
+  const pad = Math.ceil(Math.abs(t) * h / 2) + 1;
+  const dw = w + 2 * pad;
+  const out = new Float32Array(dw * h);
+  const cy = (h - 1) / 2;
+  for (let y = 0; y < h; y++) {
+    const s = (y - cy) * t - pad; // dst x' samples src x = x' + s ... (x' = x - s)
+    for (let x = 0; x < dw; x++) {
+      const sx = x + s; // source coordinate
+      if (sx <= -1 || sx >= w) continue;
+      const i0 = Math.floor(sx), f = sx - i0;
+      const a = i0 >= 0 ? src[y * w + i0] : 0, b = i0 + 1 < w ? src[y * w + i0 + 1] : 0;
+      out[y * dw + x] = a * (1 - f) + b * f;
+    }
+  }
+  return { data: out, w: dw, h, pad };
+}
+
+export function slantScore(ink, w, h, t) {
+  const s = shear(ink, w, h, t);
+  const cols = new Float32Array(s.w);
+  for (let y = 0; y < h; y++) for (let x = 0; x < s.w; x++) cols[x] += s.data[y * s.w + x];
+  let sc = 0;
+  for (let x = 0; x < s.w; x++) sc += cols[x] * cols[x];
+  return sc;
+}

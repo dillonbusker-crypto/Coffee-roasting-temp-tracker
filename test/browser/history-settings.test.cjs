@@ -844,7 +844,9 @@ async function main() {
       assert.deepEqual(missing, []);
       await t.context.setOffline(false);
       // The browser may log one failed update check for sw.js while offline; that is not an app error.
-      finish('offline', t.errors.filter((e) => !/ERR_INTERNET_DISCONNECTED|sw\.js/.test(e)));
+      const ignored = t.errors.filter((e) => /ERR_INTERNET_DISCONNECTED|sw\.js/.test(e));
+      if (ignored.length) console.log(`  (ignored ${ignored.length} offline update-check message(s): ${ignored[0]})`);
+      finish('offline', t.errors.filter((e) => !ignored.includes(e)));
       await t.context.close();
     }
 

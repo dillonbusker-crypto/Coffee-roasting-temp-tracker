@@ -515,6 +515,16 @@ function decodeAt(planes, best, base, pre, ref) {
   if (lit.length && (lit[0] < FADE_T * level || (ref && level < FADE_T * ref))) {
     return none('segments mid-fade', Object.assign(debug, { minDark: lit[0], ref }));
   }
+  // A digit cut by the right edge of the crop cannot be read: its missing part may be exactly the segment that tells it apart (a 7
+  // whose top bar runs off the edge looks like a 1). Thick ink along the last columns of the crop, inside the digit rows, means the
+  // ones digit continues beyond it. (Thin things there, the degree sign and the thermometer icon, do not survive the opening.)
+  if (!(masks[0] === DASH_MASK)) {
+    const T = pre.thick, W = pre.w, ya = Math.max(0, Math.round(best.y0 + 0.05 * best.H)), yb = Math.min(pre.h, Math.round(best.y0 + 0.95 * best.H));
+    let n = 0;
+    for (let y = ya; y < yb; y++) if (T[y * W + W - 1] > 0.5 || T[y * W + W - 2] > 0.5) n++;
+    debug.edgeInk = n / best.H;
+    if (n > 0.2 * best.H) return none('digit cut off at the right edge of the crop', debug);
+  }
   // The lattice must not have dropped the last digit: one cell to the right of the ones cell there must be no ink at the
   // positions of the right-hand segments (every digit lights b or c). A narrow 1 or a faint, half-faded digit is easy to miss
   // otherwise. Skipped when that cell lies outside the crop.

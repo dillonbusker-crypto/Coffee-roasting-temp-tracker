@@ -251,7 +251,7 @@ textarea.field-input { padding: 12px 14px; min-height: 110px; resize: none; line
 
 /* ---- After ---- */
 
-.after .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.after .tiles, .detail .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
 .tile { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--radius); padding: 10px 12px; }
 .tile-label { font-size: 13px; color: var(--muted); }
 .tile-value { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
@@ -338,8 +338,8 @@ textarea.field-input { padding: 12px 14px; min-height: 110px; resize: none; line
 .hist-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .hist-coffee { font-size: 19px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hist-date { margin-top: 1px; font-variant-numeric: tabular-nums; }
-.hist-stats { display: grid; grid-template-columns: repeat(4, minmax(max-content, 1fr)); gap: 5px; margin-top: 10px; }
-.stat { background: var(--raised); border-radius: 10px; padding: 6px 7px 7px 8px; min-width: 0; border: 1px solid transparent; }
+.hist-stats { display: grid; grid-template-columns: repeat(4, minmax(max-content, 1fr)); gap: 4px; margin-top: 10px; }
+.stat { background: var(--raised); border-radius: 10px; padding: 6px 4px 7px 7px; min-width: 0; border: 1px solid transparent; }
 .stat-label { display: block; font-size: 12px; line-height: 15px; color: var(--muted); white-space: nowrap; }
 .stat-value { display: block; font-size: 20px; line-height: 24px; font-variant-numeric: tabular-nums; }
 .stat[data-flag] { border-color: rgba(251, 191, 36, 0.55); }
@@ -379,7 +379,7 @@ textarea.field-input { padding: 12px 14px; min-height: 110px; resize: none; line
 .log-add .field-input { background: var(--raised); }
 #log-note { margin-top: 10px; }
 #log-error[data-kind="note"] { color: var(--warn); }
-#log-error { margin-top: 10px; }
+#log-error { margin-top: 8px; }
 
 /* ---- Settings ---- */
 
@@ -417,3 +417,5 @@ textarea.field-input { padding: 12px 14px; min-height: 110px; resize: none; line
 .group-body > p + .switch-row { margin-top: 12px; }
 #about-version { margin-top: 10px; }
 #reset-msg:not(:empty) { margin-top: 8px; }
+.detail-head { margin-bottom: 4px; }
+.update-card .btn { width: 100%; margin-top: 12px; }

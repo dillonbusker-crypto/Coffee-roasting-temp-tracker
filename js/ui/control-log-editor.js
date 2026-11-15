@@ -168,15 +168,14 @@ export function createControlLogEditor({ controls = [], endT = 0, onChange } = {
 
   const el = h('div', { class: 'log-editor', id: 'log-editor' },
     h('p', { class: 'muted small' }, 'Times run from Start, as m:ss. Edit a time or value, delete a change, or add one you forgot to tap.'),
-    listEl, note,
+    listEl, note, error,
     h('div', { class: 'log-add' },
       h('h3', null, 'Add a change'),
       addKindSeg,
       h('div', { class: 'row-2' },
         h('label', { class: 'log-cell' }, h('span', { class: 'log-cap' }, 'Time'), addTime),
         h('div', { class: 'log-cell' }, h('span', { class: 'log-cap' }, 'Setting'), addValueHost)),
-      addBtn),
-    error);
+      addBtn));
 
   return {
     el,

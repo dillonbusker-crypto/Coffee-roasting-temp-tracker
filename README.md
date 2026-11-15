@@ -4,6 +4,7 @@ A phone web app that reads a ThermoPro TP17's display through the camera during 
 
 - **Spec:** [docs/SPEC.md](docs/SPEC.md)
 - **Design and module contracts:** [docs/DESIGN.md](docs/DESIGN.md)
+- **Build status and what is pending:** [docs/STATUS.md](docs/STATUS.md)
 
 The app is static files with no build step. GitHub Pages serves the root of `main`.
 

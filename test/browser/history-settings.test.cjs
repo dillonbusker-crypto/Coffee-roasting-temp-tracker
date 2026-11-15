@@ -876,6 +876,7 @@ async function main() {
       await t.page.waitForSelector('#start-btn:not([disabled])', { timeout: 10000 });
       await t.page.click('#start-btn');
       await waitHash(t.page, '#roast');
+      await t.page.waitForSelector('#probe-cell');
       assert.equal(await t.page.locator('#update-card, #update-reload').count(), 0);
       assert.equal(await t.page.evaluate(() => window.__rt.app.pwa.applyUpdate()), false, 'applyUpdate refuses mid-roast');
       await t.page.waitForTimeout(500);

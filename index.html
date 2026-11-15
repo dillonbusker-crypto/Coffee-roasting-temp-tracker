@@ -3,15 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Roast Tracker">
 <title>Roast Tracker</title>
-<style>
-  body { margin: 0; padding: 24px 16px; background: #0f1115; color: #f2f4f7; font: 17px/1.5 -apple-system, system-ui, sans-serif; }
-  a { color: #ffb454; }
-</style>
+<!-- The manifest and service worker links are added by the offline/install step. -->
+<link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<h1>Roast Tracker</h1>
-<p>The app is being built. The first piece to try is the digit reader test page.</p>
-<p><a href="reader-test.html">Open the digit reader test page</a></p>
+<div id="app"></div>
+<noscript><p style="padding:16px">Roast Tracker needs JavaScript.</p></noscript>
+<script type="module" src="js/app.js"></script>
 </body>
 </html>

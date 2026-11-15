@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<meta name="color-scheme" content="dark">
+<title>Reader test</title>
+<link rel="stylesheet" href="css/reader-test.css">
+</head>
+<body>
+<header class="top">
+  <h1>Digit reader test</h1>
+  <nav class="tabs" role="tablist" aria-label="Test mode">
+    <button role="tab" id="tab-photos" aria-controls="mode-photos" aria-selected="true">Photos</button>
+    <button role="tab" id="tab-video" aria-controls="mode-video" aria-selected="false">Video</button>
+    <button role="tab" id="tab-live" aria-controls="mode-live" aria-selected="false">Live</button>
+  </nav>
+</header>
+
+<main>
+  <details class="card tips" id="tips">
+    <summary>Setup tips: glare, angle, alert 572&deg;F, the box</summary>
+    <ul>
+      <li><b>Avoid glare.</b> Tilt the phone or the thermometer until no reflection crosses the digits.</li>
+      <li><b>Face the display square-on.</b> This LCD shows a faint double image at an angle.</li>
+      <li><b>Set the thermometer's alert temperature to 572&deg;F</b> (its maximum), so it never beeps or flashes its backlight mid-roast.</li>
+      <li><b>The box:</b> drag it tight around the top-right number, the one under THERMO TEMP on the probe 1 row. Leave out the &deg;F sign and the SET TEMP number. The dashed area to its left is read too, so a third digit can appear (99 to 100) even if the box was drawn around two digits.</li>
+    </ul>
+  </details>
+
+  <div id="msg" class="msg" role="status" hidden></div>
+
+  <!-- ============ PHOTOS ============ -->
+  <section id="mode-photos" class="mode" aria-labelledby="tab-photos">
+    <div class="row">
+      <label class="btn primary">Choose photos<input id="photo-file" type="file" accept="image/*" multiple hidden></label>
+      <button class="btn" id="photo-readall" disabled>Read all</button>
+    </div>
+    <div class="thumbs" id="photo-thumbs" aria-label="Photos"></div>
+
+    <div class="stage" id="photo-stage" hidden><canvas id="photo-canvas"></canvas></div>
+    <div class="row zoomrow" hidden><button class="btn" id="photo-zoom">Zoom to box</button></div>
+    <p class="hint" id="photo-hint">Pick one or more photos of the thermometer. Then drag a box around the digits.</p>
+
+    <div class="card" id="photo-card" hidden>
+      <div class="readout">
+        <div class="value" id="photo-value">&ndash;</div>
+        <div class="meta">
+          <span class="chip" id="photo-status">no reading</span>
+          <span class="conf" id="photo-conf"></span>
+        </div>
+      </div>
+      <p class="reason" id="photo-reason"></p>
+      <div class="expect">
+        <label for="photo-expected">Expected value</label>
+        <input id="photo-expected" inputmode="numeric" autocomplete="off" placeholder="e.g. 77, or --- for no probe">
+      </div>
+      <div class="dbg">
+        <canvas id="photo-crop" aria-label="What the reader sees"></canvas>
+        <canvas id="photo-debug" aria-label="Straightened, binarized digits with segment cells"></canvas>
+      </div>
+      <div class="row">
+        <button class="btn" id="photo-copybox">Use this box for all photos</button>
+      </div>
+    </div>
+
+    <div class="card" id="photo-tally" hidden>
+      <h2>Tally</h2>
+      <div class="stats" id="photo-stats"></div>
+      <ul class="list" id="photo-list"></ul>
+    </div>
+  </section>
+
+  <!-- ============ VIDEO ============ -->
+  <section id="mode-video" class="mode" aria-labelledby="tab-video" hidden>
+    <div class="row">
+      <label class="btn primary">Choose video<input id="video-file" type="file" accept="video/*" hidden></label>
+      <select id="video-speed" aria-label="Playback speed">
+        <option value="1">1&times; speed</option>
+        <option value="2">2&times; speed</option>
+      </select>
+    </div>
+    <div class="stage" id="video-stage" hidden><video id="video-el" muted playsinline preload="auto"></video></div>
+    <div class="row zoomrow" hidden><button class="btn" id="video-zoom">Zoom to box</button></div>
+    <p class="hint" id="video-hint">Pick a recorded video of the thermometer. Set the box on the first frame, then press Process.</p>
+    <div class="row">
+      <button class="btn good" id="video-process" disabled>Process video</button>
+      <button class="btn" id="video-stop" disabled>Stop</button>
+    </div>
+    <div class="progress" id="video-progress" hidden><div class="bar" id="video-bar"></div></div>
+
+    <div class="card" id="video-live-card" hidden>
+      <div class="readout small">
+        <div class="value" id="video-value">&ndash;</div>
+        <div class="meta"><span class="chip" id="video-status">no reading</span></div>
+      </div>
+      <p class="reason" id="video-reason"></p>
+    </div>
+
+    <div class="card summary" id="video-summary" hidden>
+      <h2>Summary</h2>
+      <div class="stats" id="video-stats"></div>
+      <div class="verdict" id="video-verdict"></div>
+      <p class="hint">Tap a second to mark its value as wrong.</p>
+    </div>
+    <div class="tiles" id="video-tiles" aria-label="One tile per second"></div>
+  </section>
+
+  <!-- ============ LIVE ============ -->
+  <section id="mode-live" class="mode" aria-labelledby="tab-live" hidden>
+    <div class="row">
+      <button class="btn primary" id="live-start">Start camera</button>
+      <button class="btn" id="live-stop" disabled>Stop camera</button>
+    </div>
+    <div class="stage" id="live-stage" hidden><video id="live-video" muted playsinline autoplay></video></div>
+    <div class="row zoomrow" hidden><button class="btn" id="live-zoom">Zoom to box</button></div>
+    <p class="hint" id="live-hint">Starts the rear camera. Drag the box around the digits.</p>
+
+    <div class="card" id="live-card" hidden>
+      <div class="readout">
+        <div class="value" id="live-value">&ndash;</div>
+        <div class="meta">
+          <span class="chip" id="live-status">no reading</span>
+          <span class="conf" id="live-conf"></span>
+        </div>
+      </div>
+      <p class="reason" id="live-reason"></p>
+      <div class="dbg">
+        <canvas id="live-crop" aria-label="What the reader sees"></canvas>
+        <canvas id="live-debug" aria-label="Straightened, binarized digits with segment cells"></canvas>
+      </div>
+      <p class="reason" id="live-cam"></p>
+    </div>
+
+    <div class="card" id="soak-card" hidden>
+      <h2>Soak test</h2>
+      <p class="hint">Keeps the camera running with the screen awake, reads one value per second, and records whether Safari kept the screen and the camera alive.</p>
+      <div class="expect">
+        <label for="soak-minutes">Duration (minutes)</label>
+        <input id="soak-minutes" type="number" inputmode="decimal" min="0.05" max="120" step="0.05" value="8">
+      </div>
+      <div class="row">
+        <button class="btn good" id="soak-start">Start soak test</button>
+        <button class="btn" id="soak-stop" disabled>Stop</button>
+      </div>
+      <div class="warn" id="soak-wl-warn" hidden></div>
+      <div class="progress" id="soak-progress" hidden><div class="bar" id="soak-bar"></div></div>
+      <div class="stats" id="soak-stats"></div>
+      <div class="strip" id="soak-strip" aria-label="Last values"></div>
+      <div class="report" id="soak-report" hidden>
+        <h3 id="soak-verdict"></h3>
+        <pre id="soak-text"></pre>
+        <button class="btn" id="soak-copy">Copy report</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script type="module" src="js/reader/test-page.js"></script>
+</body>
+</html>

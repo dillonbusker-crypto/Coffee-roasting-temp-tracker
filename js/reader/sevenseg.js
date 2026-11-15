@@ -94,13 +94,33 @@ export function preprocess(img, opts = {}) {
   const bg = estimateBackground(g, w, h, Math.max(8, h / 4));
   const ratio = new Float32Array(w * h);
   for (let i = 0; i < ratio.length; i++) ratio[i] = g[i] / (bg[i] + 1);
-  const p2 = percentile(ratio, 0.02);
-  const contrast = 1 - p2;
-  const lo = 1 - 0.65 * contrast, hi = 1 - 0.35 * contrast;
+  // Ink threshold: Otsu on the background-normalised ratio, then a soft ramp around it
+  const NB = 64, hist = new Float64Array(NB);
+  for (let i = 0; i < ratio.length; i++) { const v = Math.min(1.3, Math.max(0, ratio[i])); hist[Math.min(NB - 1, Math.floor(v / 1.3 * NB))]++; }
+  let total = ratio.length, sumAll = 0;
+  for (let i = 0; i < NB; i++) sumAll += i * hist[i];
+  let wB = 0, sumB = 0, bestVar = -1, bestT = NB / 2;
+  for (let t = 0; t < NB; t++) {
+    wB += hist[t]; if (!wB) continue;
+    const wF = total - wB; if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sumAll - sumB) / wF;
+    const v = wB * wF * (mB - mF) * (mB - mF);
+    if (v > bestVar) { bestVar = v; bestT = t; }
+  }
+  const thr = (bestT + 1) / NB * 1.3;
+  let fgSum = 0, fgN = 0, bgSum = 0, bgSq = 0, bgN = 0;
+  for (let i = 0; i < ratio.length; i++) { if (ratio[i] < thr) { fgSum += ratio[i]; fgN++; } else { bgSum += ratio[i]; bgSq += ratio[i] * ratio[i]; bgN++; } }
+  const fg = fgN ? fgSum / fgN : 1, bgM = bgN ? bgSum / bgN : 1;
+  const bgSd = bgN ? Math.sqrt(Math.max(0, bgSq / bgN - bgM * bgM)) : 0;
+  const contrast = bgM - fg;
+  const inkFrac = fgN / ratio.length;
+  const half = Math.max(0.07, 1.5 * bgSd);
+  const lo = thr - half, hi = thr + half;
   const ink = new Float32Array(w * h);
   for (let i = 0; i < ink.length; i++) { const v = (hi - ratio[i]) / (hi - lo); ink[i] = v < 0 ? 0 : v > 1 ? 1 : v; }
   const thick = open2d(ink, w, h, Math.max(1, Math.round(h / 36)));
-  return { w, h, scale, ink, thick, ratio, contrast, gray: g };
+  return { w, h, scale, ink, thick, ratio, contrast, inkFrac, thr, gray: g };
 }
 
 // Morphological opening (erode then dilate) with a (2r+1) square: removes strokes thinner than the digit segments
@@ -222,7 +242,8 @@ const THETAS_DEG = [-2.5, 0, 2.5, 5, 7.5, 10, 12.5];
 const KAPPA = 1.5;   // cost of stray ink in an off segment, relative to a hole in an on segment
 const LAMBDA = 3.0;
 const ON_T = 0.8, OFF_T = 0.12; // a segment is clearly on above ON_T, clearly off below OFF_T, otherwise the frame is doubtful
-const AMBIG = 3;      // penalty (in segment areas) for a doubtful segment  // cost of ink outside the digit bodies
+const FADE_T = 0.72;  // a lit segment must be at least this dark relative to the typical lit segment (frame, or previous frames)
+const ON_LOOSE = 0.5; // registration only: a segment counts as lit above this  // cost of ink outside the digit bodies
 
 function cellScore(f, A) {
   // best of (segment on, segment off) in area-weighted units
@@ -280,13 +301,15 @@ function latticeScore(pl, xr0, y0, H, P, info) {
       const x0 = xr + g[0] * P, x1 = xr + g[1] * P, ya = y0 + g[2] * H, yb = y0 + g[3] * H;
       const f = rectSum(I, w, h, x0, ya, x1, yb) / rectArea(x0, ya, x1, yb);
       tmpF[i * 7 + s] = f;
-      if (f >= ON_T) {
+      if (f >= ON_LOOSE) {
         nOn++;
         const t = TILE[s];
-        const ink = rectSum(I, w, h, xr + t[0] * P, y0 + t[2] * H, xr + t[1] * P, y0 + t[3] * H);
+        // a segment explains its tile's ink in proportion to how convincingly it is lit
+        const wgt = f >= 0.9 ? 1 : (f - 0.45) / 0.45;
+        const ink = wgt * rectSum(I, w, h, xr + t[0] * P, y0 + t[2] * H, xr + t[1] * P, y0 + t[3] * H);
         explained += ink;
-        sc += ink - (1 - f) * A[s];
-      } else if (f > OFF_T) sc -= AMBIG * A[s];
+        sc += ink;
+      }
     }
     if (i === 0 && !nOn) return -Infinity;
     const bi = rectSum(I, w, h, xr + (BODY_L - 0.03) * P, y0 - 0.03 * H, xr + 0.03 * P, y0 + 1.03 * H);
@@ -307,12 +330,38 @@ function buildPlanes(ink, w, h, thetasDeg) {
   });
 }
 
-let _cnt = 0;
-export const _stats = () => _cnt;
+// Hill-climb a starting geometry { pi, xr0, y0, H, rho } to a local optimum of the lattice score.
+function refine(planes, start) {
+  let cur = Object.assign({}, start);
+  cur.score = latticeScore(planes[cur.pi], cur.xr0, cur.y0, cur.H, cur.rho * cur.H, null);
+  for (let iter = 0; iter < 14; iter++) {
+    let move = null;
+    const tryMove = (pi, xr0, y0, H, rho) => {
+      if (pi < 0 || pi >= planes.length || rho < 0.6 || rho > 0.8) return;
+      const sc = latticeScore(planes[pi], xr0, y0, H, rho * H, null);
+      if (sc > (move ? move.score : cur.score) + 1e-6) move = { pi, xr0, y0, H, rho, score: sc };
+    };
+    for (const d of [-2, -1, 1, 2]) {
+      tryMove(cur.pi, cur.xr0 + d, cur.y0, cur.H, cur.rho);
+      tryMove(cur.pi, cur.xr0, cur.y0 + d, cur.H, cur.rho);
+      tryMove(cur.pi, cur.xr0, cur.y0, cur.H + d, cur.rho);
+      tryMove(cur.pi, cur.xr0 + d, cur.y0 + d, cur.H, cur.rho);
+      tryMove(cur.pi, cur.xr0, cur.y0 + d, cur.H + d, cur.rho);
+      tryMove(cur.pi, cur.xr0, cur.y0, cur.H, cur.rho + 0.02 * d);
+    }
+    tryMove(cur.pi - 1, cur.xr0, cur.y0, cur.H, cur.rho);
+    tryMove(cur.pi + 1, cur.xr0, cur.y0, cur.H, cur.rho);
+    if (!move) break;
+    cur = move;
+  }
+  cur.P = cur.rho * cur.H;
+  return cur;
+}
+
 function findGeometry(planes, h, opts) {
   const cands = [];
   const stage1 = opts.stage1Planes || [1, 3, 5];
-  const Hmin = Math.max(16, Math.round(h * 0.34)), Hmax = h + 1;
+  const Hmin = Math.max(16, Math.round(h * 0.4)), Hmax = h + 1;
   const ox0 = new Int32Array(7), ox1 = new Int32Array(7), oy0 = new Int32Array(7), oy1 = new Int32Array(7), area = new Float64Array(7), Aw = new Float64Array(7);
   for (const pi of stage1) {
     const pl = planes[pi], I = pl.I, W1 = pl.w + 1, w = pl.w, hh = pl.h;
@@ -337,9 +386,8 @@ function findGeometry(planes, h, opts) {
             if (f >= 0.6) { nOn++; gain += f * Aw[s]; } else if (f > 0.15) pen += f * Aw[s];
           }
           if (!nOn || pen > 0.35 * gain) continue;
-          _cnt++;
           const lsc = latticeScore(pl, xr, y0, H, P, null);
-          if (lsc > 0) cands.push({ sc: lsc, pi, xr, y0, H });
+          if (lsc > -Infinity) cands.push({ sc: lsc, pi, xr, y0, H });
         }
       }
     }
@@ -354,29 +402,8 @@ function findGeometry(planes, h, opts) {
   // stage 2: hill-climb each candidate on the full lattice
   let best = null;
   for (const c of picked) {
-    let cur = { pi: c.pi, xr0: c.xr, y0: c.y0, H: c.H, rho: RHO };
-    cur.score = latticeScore(planes[cur.pi], cur.xr0, cur.y0, cur.H, cur.rho * cur.H, null);
-    for (let iter = 0; iter < 14; iter++) {
-      let move = null;
-      const tryMove = (pi, xr0, y0, H, rho) => {
-        if (pi < 0 || pi >= planes.length || rho < 0.6 || rho > 0.8) return;
-        const sc = latticeScore(planes[pi], xr0, y0, H, rho * H, null);
-        if (sc > (move ? move.score : cur.score) + 1e-6) move = { pi, xr0, y0, H, rho, score: sc };
-      };
-      for (const d of [-2, -1, 1, 2]) {
-        tryMove(cur.pi, cur.xr0 + d, cur.y0, cur.H, cur.rho);
-        tryMove(cur.pi, cur.xr0, cur.y0 + d, cur.H, cur.rho);
-        tryMove(cur.pi, cur.xr0, cur.y0, cur.H + d, cur.rho);
-        tryMove(cur.pi, cur.xr0 + d, cur.y0 + d, cur.H, cur.rho);
-        tryMove(cur.pi, cur.xr0, cur.y0 + d, cur.H + d, cur.rho);
-        tryMove(cur.pi, cur.xr0, cur.y0, cur.H, cur.rho + 0.02 * d);
-      }
-      tryMove(cur.pi - 1, cur.xr0, cur.y0, cur.H, cur.rho);
-      tryMove(cur.pi + 1, cur.xr0, cur.y0, cur.H, cur.rho);
-      if (!move) break;
-      cur = move;
-    }
-    if (cur.score > (best ? best.score : -Infinity)) best = Object.assign({}, cur, { P: cur.rho * cur.H });
+    const cur = refine(planes, { pi: c.pi, xr0: c.xr, y0: c.y0, H: c.H, rho: RHO });
+    if (cur.score > (best ? best.score : -Infinity)) best = cur;
   }
   return { best, picked };
 }
@@ -387,44 +414,124 @@ function none(reason, debug) {
   return { status: 'none', value: null, digits: null, confidence: 0, debug: Object.assign({ reason }, debug) };
 }
 
+// Strict classification of every segment at a fixed geometry. A segment is lit only if a core-sized patch (allowed to slide a
+// little) is solidly inked, and unlit only if its whole (slightly dilated) window is clean; anything between is doubtful.
+function classify(pl, g, dark) {
+  const { I, w, h } = pl;
+  const H = g.H, P = g.P;
+  const dx = Math.max(1, Math.round(0.035 * H)), dy = Math.max(1, Math.round(0.025 * H));
+  const cells = [];
+  for (let i = 0; i < 3; i++) {
+    const xr = g.xr0 - i * P;
+    const segs = [];
+    for (let s = 0; s < 7; s++) {
+      const q = SEG[s];
+      const bar = s === 0 || s === 3 || s === 6;
+      const x0 = xr + q[0] * P, x1 = xr + q[1] * P, ya = g.y0 + q[2] * H, yb = g.y0 + q[3] * H;
+      const area = rectArea(x0, ya, x1, yb);
+      let fOn = 0, bsx = 0, bsy = 0;
+      for (const k of [-1, 0, 1]) {
+        const sx = bar ? 0 : k * dx, sy = bar ? k * dy : 0;
+        const f = rectSum(I, w, h, x0 + sx, ya + sy, x1 + sx, yb + sy) / area;
+        if (f > fOn) { fOn = f; bsx = sx; bsy = sy; }
+      }
+      const ex = bar ? 0 : dx, ey = bar ? dy : 0;
+      const fOff = rectSum(I, w, h, x0 - ex, ya - ey, x1 + ex, yb + ey) / rectArea(x0 - ex, ya - ey, x1 + ex, yb + ey);
+      const state = fOn >= ON_T ? 'on' : fOff <= OFF_T ? 'off' : '?';
+      const dk = state === 'on' && dark ? rectSum(dark.I, dark.w, dark.h, x0 + bsx, ya + bsy, x1 + bsx, yb + bsy) / area : 0;
+      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, state, dark: dk });
+    }
+    cells.push({ index: i, x0: xr + BODY_L * P, x1: xr, y0: g.y0, y1: g.y0 + H, segs });
+  }
+  return cells;
+}
+
 export function readDisplay(img, opts = {}) {
   const o = Object.assign({ workHeight: 72 }, opts);
+  const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
   if (!img || img.width < 24 || img.height < 16) return none('crop too small');
   const pre = preprocess(img, o);
-  if (pre.contrast < 0.25) return none('low contrast', { contrast: pre.contrast });
+  const base = { w: pre.w, h: pre.h, scale: pre.scale, contrast: pre.contrast, inkFrac: pre.inkFrac };
+  if (pre.contrast < 0.2 || pre.inkFrac < 0.005) return none('low contrast', base);
   const planes = buildPlanes(pre.thick, pre.w, pre.h, THETAS_DEG);
-  const { best, picked } = findGeometry(planes, pre.h, o);
-  const debug = { w: pre.w, h: pre.h, scale: pre.scale, contrast: pre.contrast, picked, geometry: best };
-  if (!best) return none('no digit found', debug);
+
+  let best = null, usedHint = false, picked = [];
+  let res = null;
+  const hint = o.hint;
+  if (hint && hint.w === pre.w && hint.h === pre.h && hint.geometry && planes[hint.geometry.pi]) {
+    best = refine(planes, hint.geometry);
+    res = decodeAt(planes, best, base, pre, hint.ink);
+    usedHint = true;
+  }
+  if (!res || res.status === 'none') {
+    const f = findGeometry(planes, pre.h, o);
+    picked = f.picked;
+    if (f.best) { best = f.best; res = decodeAt(planes, best, base, pre, hint && hint.ink); }
+    else res = none('no digit found', base);
+    usedHint = false;
+  }
+  res.debug.usedHint = usedHint;
+  res.debug.picked = picked;
+  res.debug.hintOut = best && res.status !== 'none' ? { w: pre.w, h: pre.h, geometry: { pi: best.pi, xr0: best.xr0, y0: best.y0, H: best.H, rho: best.rho }, ink: res.debug.inkLevel } : null;
+  res.debug.ms = typeof performance !== 'undefined' ? performance.now() - t0 : 0;
+  return res;
+}
+
+function decodeAt(planes, best, base, pre, ref) {
   const pl = planes[best.pi];
   const info = {};
   latticeScore(pl, best.xr0, best.y0, best.H, best.P, info);
-  const fills = Array.from(tmpF);
-  Object.assign(debug, { slantDeg: pl.deg, fills, U: info.U, zInk: info.zInk, bodyInk: info.bodyInk, plane: pl });
-  // classify segments
+  // raw darkness (not thresholded) in the same straightened frame, to compare the lit segments with each other: a segment that is
+  // still fading in or out is lighter than the rest, and a frame that mixes old and new segments must not be read
+  const dk = new Float32Array(pre.w * pre.h);
+  for (let i = 0; i < dk.length; i++) { const v = 1 - pre.ratio[i]; dk[i] = v < 0 ? 0 : v > 1 ? 1 : v; }
+  const dsh = shear(dk, pre.w, pre.h, pl.t);
+  const dark = { I: integral(dsh.data, dsh.w, dsh.h), w: dsh.w, h: dsh.h };
+  const cells = classify(pl, best, dark);
+  const debug = Object.assign({}, base, {
+    geometry: best, slantDeg: pl.deg, U: info.U, zInk: info.zInk, bodyInk: info.bodyInk,
+    overlay: { w: pl.w, h: pl.h, slantDeg: pl.deg, cells, ink: inkBytes(pl.data) },
+  });
   const masks = [0, 0, 0];
-  let minMargin = 1;
-  for (let i = 0; i < 3; i++) for (let s = 0; s < 7; s++) {
-    const f = fills[i * 7 + s];
-    if (f >= ON_T) { masks[i] |= 1 << s; minMargin = Math.min(minMargin, (f - ON_T) / (1 - ON_T)); }
-    else if (f <= OFF_T) minMargin = Math.min(minMargin, (OFF_T - f) / OFF_T);
-    else return none('ambiguous segment', Object.assign(debug, { masks, cell: i, seg: SEG_NAMES[s], f }));
-  }
+  let minMargin = 1, doubt = null;
+  cells.forEach((c, i) => c.segs.forEach((sg, s) => {
+    if (sg.state === 'on') { masks[i] |= 1 << s; minMargin = Math.min(minMargin, (sg.fOn - ON_T) / (1 - ON_T)); }
+    else if (sg.state === 'off') minMargin = Math.min(minMargin, (OFF_T - sg.fOff) / OFF_T);
+    else if (!doubt) doubt = { cell: i, seg: sg.name, fOn: sg.fOn, fOff: sg.fOff };
+  }));
   debug.masks = masks;
+  debug.fills = cells.flatMap(c => c.segs.map(sg => sg.fOn));
+  if (doubt) return none('ambiguous segment', Object.assign(debug, doubt));
+  const lit = cells.flatMap(c => c.segs.filter(sg => sg.state === 'on').map(sg => sg.dark)).sort((a, b) => a - b);
+  const level = lit.length ? lit[Math.floor(lit.length / 2)] : 0;
+  debug.inkLevel = level;
+  if (lit.length && (lit[0] < FADE_T * level || (ref && level < FADE_T * ref))) {
+    return none('segments mid-fade', Object.assign(debug, { minDark: lit[0], ref }));
+  }
   if (masks[0] === DASH_MASK && masks[1] === DASH_MASK && masks[2] === DASH_MASK) {
     return { status: 'dashes', value: null, digits: '---', confidence: minMargin, debug };
   }
+  // three bars on one row and nothing else cannot be a number (and the dash row may sit at the a, g or d position when the
+  // digit height is not pinned by other ink)
+  const sameBar = [1, 8, 64].some(m => masks[0] === m && masks[1] === m && masks[2] === m);
+  if (sameBar) return { status: 'dashes', value: null, digits: '---', confidence: minMargin, debug };
   const ds = masks.map(m => (m === 0 ? ' ' : PATTERN_TO_DIGIT[m] ?? '?'));
   debug.digits = ds;
   if (ds.includes('?')) return none('invalid pattern', debug);
   const [d0, d1, d2] = ds;
   let str;
+  if (d0 === ' ') return none('ones digit blank', debug);
   if (d2 === ' ') { if (d1 === ' ' || d1 === '0') return none('too few digits', debug); str = d1 + d0; }
-  else { if (!'12345'.includes(d2)) return none('bad hundreds digit', debug); str = d2 + d1 + d0; }
-  if (d0 === ' ' || str.includes(' ')) return none('gap in digits', debug);
+  else { if (!'12345'.includes(d2)) return none('bad hundreds digit', debug); if (d1 === ' ') return none('gap in digits', debug); str = d2 + d1 + d0; }
   const value = parseInt(str, 10);
   if (value < 14 || value > 572) return none('out of display range', debug);
   return { status: 'ok', value, digits: str, confidence: minMargin, debug };
 }
 
-export const _internals = { latticeScore, buildPlanes, findGeometry, tmpF, THETAS_DEG, singleCellScore, segAreas };
+function inkBytes(data) {
+  const out = new Uint8ClampedArray(data.length);
+  for (let i = 0; i < data.length; i++) out[i] = data[i] * 255;
+  return out;
+}
+
+export const _internals = { latticeScore, buildPlanes, findGeometry, refine, tmpF, THETAS_DEG, segAreas, classify };

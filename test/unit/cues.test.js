@@ -129,8 +129,9 @@ test('endTemp fires when the cap is hit before the countdown ends', () => {
   assert.equal(end.kind, 'critical');
   assert.ok(!r.ids.includes('dropNow'), 'the countdown had not finished');
   const snap = r.session.snapshot();
-  assert.ok(snap.smooth[end.t] >= FIRST_CRACK_READING + 5);
-  assert.ok(snap.smooth[end.t - 1] < FIRST_CRACK_READING + 5);
+  const cap = snap.events.firstCrack.f + 5;     // the stamped first-crack temperature plus the cap
+  assert.ok(snap.smooth[end.t] >= cap);
+  assert.ok(snap.smooth[end.t - 1] < cap);
   assert.equal(times(r, 'endTemp').length, 1);
 });
 
@@ -141,6 +142,39 @@ test('endTemp does not fire if the countdown already called the drop', () => {
   } });
   assert.ok(r.ids.includes('dropNow'));
   assert.ok(!r.ids.includes('endTemp'));
+});
+
+test('endTemp cannot fire before First crack is marked, even past expected reading + cap', () => {
+  const r = runRoast({ preset: 'on-target', maxSec: 420, user: null });
+  const snap = r.session.snapshot();
+  assert.ok(snap.temp >= DEFAULTS.expectedFcF + DEFAULTS.endTempCapF, 'the roast did pass 425 F');
+  assert.ok(!r.ids.includes('endTemp'));
+});
+
+test('endTemp cap follows the stamped First crack temperature, not the expected one', () => {
+  // Real first crack reads 430 on this probe: the cap is 445, so 425 must stay silent.
+  const engine = createCueEngine({ settings: DEFAULTS });
+  const at = (t, temp, fc) => snapAt(t, { smooth: () => temp, ror: () => 30, events: fc ? { firstCrack: fc } : {} });
+  assert.deepEqual(engine.tick(at(300, 426, { t: 290, f: 430 })), []);
+  assert.deepEqual(engine.tick(at(301, 444, { t: 290, f: 430 })), []);
+  const fired = engine.tick(at(302, 445, { t: 290, f: 430 }));
+  assert.deepEqual(fired.map((c) => c.id), ['endTemp']);
+  assert.deepEqual(engine.tick(at(303, 450, { t: 290, f: 430 })), [], 'at most once');
+});
+
+test('endTemp: re-marking First crack moves the cap, and it still fires at most once', () => {
+  const at = (t, temp, fc) => snapAt(t, { smooth: () => temp, ror: () => 30, events: fc ? { firstCrack: fc } : {} });
+  const engine = createCueEngine({ settings: DEFAULTS });
+  assert.deepEqual(engine.tick(at(300, 430, { t: 290, f: 420 })), []);          // cap 435
+  assert.ok(!engine.tick(at(301, 430, null)).some((c) => c.id === 'endTemp'));    // Undo (fcSoon may speak, endTemp may not)
+  assert.deepEqual(engine.tick(at(302, 430, { t: 302, f: 428 })), []);           // new stamp: cap 443
+  assert.deepEqual(engine.tick(at(303, 440, { t: 302, f: 428 })), []);
+  assert.deepEqual(engine.tick(at(304, 443, { t: 302, f: 428 })).map((c) => c.id), ['endTemp']);
+  assert.deepEqual(engine.tick(at(305, 443, { t: 305, f: 400 })), [], 'already fired');
+
+  const lowered = createCueEngine({ settings: DEFAULTS });
+  assert.deepEqual(lowered.tick(at(300, 430, { t: 290, f: 425 })), []);          // cap 440
+  assert.deepEqual(lowered.tick(at(301, 430, { t: 301, f: 410 })).map((c) => c.id), ['endTemp']); // re-mark: cap 425
 });
 
 // ---------- corrective rate limits (hand-built snapshots) ----------

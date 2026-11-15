@@ -225,8 +225,11 @@ export function createCueEngine({ settings = DEFAULTS, mode = 'starter', referen
       }
     }
 
-    // End temperature: the cap is reached before the countdown has called the drop.
-    if (!endTempDone && !dropNowDone && temp !== null && temp >= snap.expectedFcF + S.endTempCapF) {
+    // End temperature: the cap is the First crack temperature the user stamped plus
+    // endTempCapF (not the expected reading, which is only a guess). It cannot fire before
+    // First crack is marked, and only if the countdown has not already called the drop.
+    // Re-marking First crack moves the cap; the cue still fires at most once.
+    if (fc && fc.f != null && !endTempDone && !dropNowDone && temp !== null && temp >= fc.f + S.endTempCapF) {
       endTempDone = true;
       emit('endTemp', TEXT.endTemp);
     }

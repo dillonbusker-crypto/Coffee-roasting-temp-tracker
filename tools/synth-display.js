@@ -172,7 +172,7 @@ export function renderDisplay(p) {
   const grainRows = new Float32Array(h);
   for (let y = 0; y < h; y++) grainRows[y] = gauss(rng);
   for (let y = 0; y < h; y++) {
-    const s = 1 + k * (y / h - 0.5) * 2; // horizontal scale about the centre
+    const s = (p.aspect || 1) * (1 + k * (y / h - 0.5) * 2); // horizontal scale about the centre
     for (let x = 0; x < w; x++) {
       let sx = w / 2 + (x - w / 2) / s;
       let r, g2, b;
@@ -202,10 +202,10 @@ export function renderDisplay(p) {
 
 // Distortion levels. Ranges are [min, max] of what is drawn at random for each frame.
 export const LEVELS = {
-  clean:    { blur: [0, 0.3], noise: [0, 2], grain: [0, 1], grad: [0, 0.05], glare: 0, rot: [-0.5, 0.5], persp: [0, 0.01], inkAlpha: [0.88, 0.95], contrast: [0.9, 1] },
-  mild:     { blur: [0.3, 1.0], noise: [2, 6], grain: [1, 3], grad: [0.05, 0.2], glare: 0, rot: [-2, 2], persp: [0, 0.03], inkAlpha: [0.8, 0.92], contrast: [0.8, 0.95] },
-  moderate: { blur: [0.8, 1.7], noise: [5, 11], grain: [2, 5], grad: [0.15, 0.35], glare: 0.3, rot: [-4, 4], persp: [0.02, 0.06], inkAlpha: [0.65, 0.88], contrast: [0.6, 0.85] },
-  severe:   { blur: [1.5, 2.6], noise: [9, 18], grain: [4, 8], grad: [0.3, 0.55], glare: 0.7, rot: [-7, 7], persp: [0.05, 0.12], inkAlpha: [0.45, 0.8], contrast: [0.4, 0.7] },
+  clean:    { aspect: [0.98, 1.02], blur: [0, 0.3], noise: [0, 2], grain: [0, 1], grad: [0, 0.05], glare: 0, rot: [-0.5, 0.5], persp: [0, 0.01], inkAlpha: [0.88, 0.95], contrast: [0.9, 1] },
+  mild:     { aspect: [0.94, 1.06], blur: [0.3, 1.0], noise: [2, 6], grain: [1, 3], grad: [0.05, 0.2], glare: 0, rot: [-2, 2], persp: [0, 0.03], inkAlpha: [0.8, 0.92], contrast: [0.8, 0.95] },
+  moderate: { aspect: [0.88, 1.12], blur: [0.8, 1.7], noise: [5, 11], grain: [2, 5], grad: [0.15, 0.35], glare: 0.3, rot: [-4, 4], persp: [0.02, 0.06], inkAlpha: [0.65, 0.88], contrast: [0.6, 0.85] },
+  severe:   { aspect: [0.8, 1.2], blur: [1.5, 2.6], noise: [9, 18], grain: [4, 8], grad: [0.3, 0.55], glare: 0.7, rot: [-7, 7], persp: [0.05, 0.12], inkAlpha: [0.45, 0.8], contrast: [0.4, 0.7] },
 };
 
 /**
@@ -219,13 +219,13 @@ export function randomParams(rng, text, level = 'mild', opts = {}) {
   const jit = opts.jitter ?? 0.05;
   const m = margin * H;
   const geometry = {
-    bodyW: rr(rng, 0.6, 0.68), tv: rr(rng, 0.14, 0.2), th: rr(rng, 0.12, 0.16), gap: rr(rng, 0.012, 0.03), bevel: rr(rng, 0.25, 0.5),
-    slant: rr(rng, 3.5, 9), midY: rr(rng, 0.47, 0.5), ghostDx: rr(rng, 0.015, 0.03), ghostDy: rr(rng, 0.02, 0.035), ghostAlpha: rr(rng, 0.1, 0.22),
+    bodyW: rr(rng, 0.64, 0.68), tv: rr(rng, 0.15, 0.19), th: rr(rng, 0.125, 0.15), gap: rr(rng, 0.012, 0.03), bevel: rr(rng, 0.25, 0.5),
+    slant: rr(rng, 4, 8), midY: rr(rng, 0.475, 0.495), ghostDx: rr(rng, 0.015, 0.03), ghostDy: rr(rng, 0.02, 0.035), ghostAlpha: rr(rng, 0.1, 0.22),
     inkAlpha: 1, dash: false,
   };
   const contrast = rr(rng, ...L.contrast);
   geometry.inkAlpha = rr(rng, ...L.inkAlpha) * Math.min(1, contrast / 0.9);
-  const pitch = rr(rng, 0.68, 0.74);
+  const pitch = rr(rng, 0.70, 0.73);
   const bodyW = geometry.bodyW * H;
   // The reader's crop: user box (digits of a 2-digit display plus margin) widened left by 0.7 of the box height.
   const boxH = H + 2 * m;
@@ -242,11 +242,12 @@ export function randomParams(rng, text, level = 'mild', opts = {}) {
   const grAng = rng() * 6.28;
   const p = {
     w, h, text, H, xr, y0, pitch, geometry,
+    aspect: rr(rng, ...L.aspect),
     rotation: rr(rng, ...L.rot), perspective: rr(rng, ...L.persp) * (rng() < 0.5 ? -1 : 1), blur: rr(rng, ...L.blur) * Math.max(0.6, H / 140),
     noise: rr(rng, ...L.noise), grain: rr(rng, ...L.grain),
     gradient: { amp: rr(rng, ...L.grad), angle: grAng },
     glare: L.glare && rng() < 0.6 ? { x: rng() * w, y: rng() * h, r: rr(rng, 0.2, 0.5) * w, amp: rr(rng, 0.1, 1) * L.glare } : null,
-    bg: [rr(rng, 120, 170), rr(rng, 130, 180), rr(rng, 120, 170)],
+    bg: [rr(rng, 125, 160), rr(rng, 140, 172), rr(rng, 125, 160)],
     ink: Math.round(rr(rng, 8, 40) + (1 - contrast) * 80),
     extras: ex, fade: opts.fade, seed: Math.floor(rng() * 1e9),
   };

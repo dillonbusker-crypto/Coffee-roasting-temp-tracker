@@ -515,10 +515,10 @@ function decodeAt(planes, best, base, pre, ref) {
   if (lit.length && (lit[0] < FADE_T * level || (ref && level < FADE_T * ref))) {
     return none('segments mid-fade', Object.assign(debug, { minDark: lit[0], ref }));
   }
-  // A digit cut by the right edge of the crop cannot be read: its missing part may be exactly the segment that tells it apart (a 7
-  // whose top bar runs off the edge looks like a 1). If thick ink runs from inside the ones digit to the last column of the crop,
-  // the digit continues beyond it. Ink at the edge that starts beyond the digit (the bezel, other labels) is not a cut digit.
-  if (masks[0] !== DASH_MASK) {
+  // A 7 whose top bar runs off the right edge of the crop looks like a 1. If the ones digit reads as 1 and thick ink runs from inside
+  // that digit to the last column of the crop, the digit may continue beyond the crop, so the frame is doubtful. Ink at the edge
+  // that starts beyond the digit (the bezel, other labels) is not a cut digit.
+  if (masks[0] === 0b0000110) { // only a lone 1 can hide a cut: a 7 with its bar clipped away reads as 1
     const T = pre.thick, W = pre.w, cy = (pre.h - 1) / 2;
     const ya = Math.max(0, Math.round(best.y0 + 0.05 * best.H)), yb = Math.min(pre.h, Math.round(best.y0 + 0.95 * best.H));
     let n = 0;

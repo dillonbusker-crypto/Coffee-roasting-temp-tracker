@@ -1,0 +1,115 @@
+/* Camera source: the Setup panel and the Roast screen crop strip. Tokens come from app.css. */
+
+/* The generic "Reading now" card repeats what the camera panel already shows large, live. */
+.card:has(.cam-panel) > .reading { display: none; }
+
+.cam-panel { display: block; }
+.cam-panel [hidden] { display: none !important; }
+
+/* ---- Permission and trouble cards ---- */
+
+.cam-card { background: var(--raised); border-radius: 12px; padding: 14px; border-left: 4px solid var(--warn); }
+.cam-card[data-state="needs-tap"] { border-left-color: var(--ror); }
+.cam-card-title { font-size: 19px; color: var(--text); margin: 0 0 8px; }
+.cam-card p { font-size: 16px; }
+.cam-card-btn { width: 100%; margin-top: 14px; }
+.cam-card-btn:disabled { opacity: 0.6; }
+
+/* ---- Live preview with the reading box ---- */
+
+.cam-hint { margin: 0 0 8px; font-size: 14px; line-height: 19px; color: var(--muted); }
+.cam-stage-wrap { display: flex; justify-content: center; }
+.cam-stage {
+  position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 10px;
+  touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.cam-video { display: block; width: 100%; height: 100%; object-fit: fill; background: #000; border-radius: 10px; pointer-events: none; }
+.cam-overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+  padding: 12px; border-radius: 10px; background: rgba(15, 17, 21, 0.78); color: var(--text); font-weight: 600; font-size: 16px;
+  pointer-events: none;
+}
+.cam-stage[data-state="ended"] .cam-overlay, .cam-stage[data-state="muted"] .cam-overlay, .cam-stage[data-state="stalled"] .cam-overlay {
+  color: var(--warn);
+}
+
+.cb-layer { position: absolute; inset: 0; touch-action: none; }
+.cb-box {
+  position: absolute; border: 2px solid var(--temp); border-radius: 3px; background: rgba(255, 180, 84, 0.1);
+  touch-action: none; cursor: move;
+}
+.cb-ext {
+  position: absolute; border: 2px dashed var(--warn); border-right: 0; background: rgba(251, 191, 36, 0.14);
+  pointer-events: none;
+}
+/* Grab areas sit just outside the box, so a small box can still be moved from inside it. */
+.cb-h { position: absolute; touch-action: none; }
+.cb-h i { position: absolute; display: block; background: var(--temp); border: 2px solid #1b1305; pointer-events: none; }
+.cb-h[data-h="nw"], .cb-h[data-h="ne"], .cb-h[data-h="se"], .cb-h[data-h="sw"] { width: 56px; height: 56px; }
+.cb-h[data-h="nw"] { left: -56px; top: -56px; }
+.cb-h[data-h="ne"] { right: -56px; top: -56px; }
+.cb-h[data-h="se"] { right: -56px; bottom: -56px; }
+.cb-h[data-h="sw"] { left: -56px; bottom: -56px; }
+/* Only the corners are drawn, small so they do not cover the digits; the edges are grab areas with no mark. */
+.cb-h[data-h="nw"] i, .cb-h[data-h="ne"] i, .cb-h[data-h="se"] i, .cb-h[data-h="sw"] i { width: 14px; height: 14px; border-radius: 50%; }
+.cb-h[data-h="nw"] i { right: -9px; bottom: -9px; }
+.cb-h[data-h="ne"] i { left: -9px; bottom: -9px; }
+.cb-h[data-h="se"] i { left: -9px; top: -9px; }
+.cb-h[data-h="sw"] i { right: -9px; top: -9px; }
+.cb-h[data-h="n"], .cb-h[data-h="s"] { left: 0; right: 0; height: 44px; }
+.cb-h[data-h="n"] { top: -44px; }
+.cb-h[data-h="s"] { bottom: -44px; }
+.cb-h[data-h="e"], .cb-h[data-h="w"] { top: 0; bottom: 0; width: 44px; }
+.cb-h[data-h="e"] { right: -44px; }
+.cb-h[data-h="w"] { left: -44px; }
+.cb-h[data-h="n"] i, .cb-h[data-h="s"] i, .cb-h[data-h="e"] i, .cb-h[data-h="w"] i { display: none; }
+
+.cam-legend { margin: 10px 0 0; font-size: 13px; line-height: 18px; color: var(--muted); }
+.cam-key { display: inline-block; width: 16px; height: 10px; border-radius: 2px; margin: 0 6px 0 0; vertical-align: -1px; }
+.cam-key-box { border: 2px solid var(--temp); background: rgba(255, 180, 84, 0.2); }
+.cam-key-ext { border: 2px dashed var(--warn); background: rgba(251, 191, 36, 0.2); margin-left: 12px; }
+
+/* ---- Magnified crop and the value read ---- */
+
+.cam-read { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 12px; }
+.cam-mag { background: #000; border-radius: 10px; padding: 6px 8px 8px; min-width: 0; }
+.cam-cap { display: block; font-size: 12px; line-height: 14px; color: var(--muted); margin-bottom: 4px; }
+.cam-crop { display: block; width: 100%; height: 76px; object-fit: contain; background: #000; }
+.cam-val { background: var(--raised); border-radius: 10px; padding: 6px 12px 8px; min-width: 128px; display: flex; flex-direction: column; justify-content: center; }
+.cam-value { font-size: 46px; line-height: 50px; font-weight: 700; color: var(--temp); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cam-value[data-kind="none"] { color: var(--muted); }
+.cam-value[data-kind="dashes"] { color: var(--warn); }
+.cam-status {
+  margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--raised);
+  border-left: 4px solid var(--warn); font-weight: 600; font-size: 16px; line-height: 1.3;
+}
+.cam-status[data-kind="ok"] { border-left-color: var(--good); }
+
+.cam-tips { margin-top: 14px; }
+.cam-tips ul { margin: 0; padding-left: 20px; }
+.cam-tips li { margin-top: 6px; font-size: 15px; line-height: 1.35; }
+
+/* ---- Roast screen strip ---- */
+
+.cam-strip { display: flex; align-items: center; gap: 8px; margin-top: 2px; min-width: 0; }
+.cam-strip-view {
+  position: relative; flex: none; overflow: hidden; width: 120px; height: 40px; border-radius: 6px; background: #000;
+  box-shadow: 0 0 0 2px var(--hair);
+}
+.cam-video-strip { position: absolute; border-radius: 0; max-width: none; }
+.cam-strip-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.1; }
+.cam-strip-line { font-size: 12px; line-height: 14px; color: var(--muted); }
+.cam-strip-value { font-size: 17px; color: var(--temp); font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 700; }
+.cam-strip[data-state="warn"] .cam-strip-view { box-shadow: 0 0 0 2px var(--warn); }
+.cam-strip[data-state="warn"] .cam-strip-value, .cam-strip[data-state="warn"] .cam-strip-line { color: var(--warn); }
+.cam-strip[data-state="lost"] .cam-strip-view { box-shadow: 0 0 0 2px var(--alert); }
+.cam-strip[data-state="lost"] .cam-video-strip { opacity: 0.3; }
+.cam-strip[data-state="lost"] .cam-strip-line { color: var(--alert); font-weight: 700; }
+.cam-strip[data-state="lost"] .cam-strip-value { color: var(--muted); }
+
+/* With the camera on, the two buttons beside the strip are narrower so the strip has room (their text wraps to two lines). */
+.status-strip:has(.cam-strip) .status-btn { flex: 0 0 80px; padding: 0 6px; font-size: 15px; line-height: 1.15; }
+
+/* The stream's <video> waits here between Setup and the Roast screen (a video removed from the page pauses). */
+#cam-holder { position: fixed; left: 0; bottom: 0; width: 8px; height: 8px; overflow: hidden; opacity: 0.02; pointer-events: none; z-index: 0; }
+#cam-holder video { width: 8px; height: 8px; }

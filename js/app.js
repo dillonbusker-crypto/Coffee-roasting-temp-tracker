@@ -18,6 +18,7 @@ import { createWakeLock } from './ui/wakelock.js';
 import { referenceFromRecord } from './ui/chart-model.js';
 import { saveDraft, clearDraft } from './ui/draft.js';
 import { mountSetup } from './ui/setup.js';
+import { defaultSourceId } from './ui/sources.js';
 import { mountRoast } from './ui/roast-screen.js';
 import { mountAfter } from './ui/after.js';
 import { mountHistory } from './ui/history.js';
@@ -42,7 +43,7 @@ const app = {
   record: null,            // a finished roast waiting on the After screen
   activeChart: null,       // the chart on screen (test hook)
   setup: {
-    sourceId: 'demo',
+    sourceId: defaultSourceId(),   // Camera when this page can open one, else Demo
     preset: 'on-target',
     speed: 1,
     coffee: '',

@@ -51,6 +51,8 @@ const waitT = (page, sec, timeout = 40000) =>
 async function newPage(browser, base, { width = 390, height = 844, context = null } = {}) {
   const ctx = context || await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, acceptDownloads: true });
   const page = await ctx.newPage();
+  // These tests run the Demo and Manual sources; camera behaviour is in camera.test.cjs. With no camera API the app defaults to Demo.
+  await page.addInitScript(() => { Object.defineProperty(navigator, 'mediaDevices', { value: undefined, configurable: true }); });
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));

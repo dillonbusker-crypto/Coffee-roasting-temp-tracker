@@ -18,6 +18,7 @@ export function mountSetup(root, app) {
   const maxF = settings.reader?.maxF ?? 550;
 
   let source = null;                 // the preview source for the selected entry
+  let panelCleanup = null;           // what the selected entry's setup panel returned
   let handedOff = false;
   let good = 0;
   let reading = { value: null, status: 'none' };
@@ -157,11 +158,15 @@ export function mountSetup(root, app) {
     source = null;
   }
 
+  function mountPanel() {
+    if (panelCleanup) { try { panelCleanup(); } catch { /* ignore */ } panelCleanup = null; }
+    clear(el.panel);
+    panelCleanup = entry().renderSetupPanel(el.panel, ctx) || null;
+  }
+
   function selectSource(id) {
     S.sourceId = id;
-    clear(el.panel);
-    const e = entry();
-    e.renderSetupPanel(el.panel, ctx);
+    mountPanel();
     rebuildSource();
   }
 
@@ -371,8 +376,7 @@ export function mountSetup(root, app) {
   // ---- Boot ----
   renderHeat();
   renderDev();
-  clear(el.panel);
-  entry().renderSetupPanel(el.panel, ctx);
+  mountPanel();
   rebuildSource();
   refreshReference();
   fillNames();
@@ -385,5 +389,6 @@ export function mountSetup(root, app) {
     clearInterval(pollTimer);
     clearTimeout(refTimer);
     stopPreview();
+    if (panelCleanup) { try { panelCleanup(); } catch { /* ignore */ } panelCleanup = null; }
   };
 }

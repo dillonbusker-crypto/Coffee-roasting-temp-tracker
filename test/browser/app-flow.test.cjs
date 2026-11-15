@@ -42,6 +42,8 @@ const step = (name) => console.log(`  - ${name}`);
 async function newPage(browser, base, { width = 390, height = 844 } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
   const page = await context.newPage();
+  // These tests run the Demo and Manual sources; camera behaviour is in camera.test.cjs. With no camera API the app defaults to Demo.
+  await page.addInitScript(() => { Object.defineProperty(navigator, 'mediaDevices', { value: undefined, configurable: true }); });
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
@@ -124,10 +126,10 @@ async function main() {
       assert.equal(await text(page, '#mode-line'), 'Starter guardrails');
       step('Reminder card and wake-lock warning logic');
       assert.match(await text(page, '#reminder'), /alert temperature to its maximum, 572°F/);
-      step('Camera shows a placeholder and cannot start');
+      step('Without a camera API the Camera segment says so and Start stays disabled (camera.test.cjs covers the rest)');
       await page.click('[data-value="camera"]');
       assert.equal(await page.locator('#start-btn').isDisabled(), true);
-      assert.match(await text(page, '#source-panel'), /Camera reading is coming/);
+      assert.match(await text(page, '#source-panel'), /can.t use the camera/);
       step('Manual: one typed plausible value enables Start');
       await page.click('[data-value="manual"]');
       assert.equal(await page.locator('#start-btn').isDisabled(), true);

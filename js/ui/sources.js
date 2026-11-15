@@ -1,6 +1,6 @@
 // The temperature source registry. Setup and the Roast screen know nothing about any one
-// source: they look an entry up here. To add a source (the camera), call registerSource()
-// with an entry; nothing in Setup needs to change.
+// source: they look an entry up here. To add a source, call registerSource() with an entry;
+// nothing in Setup needs to change.
 //
 // entry = {
 //   id, label,
@@ -11,11 +11,11 @@
 //                               //   false: Start asks createSource() for a fresh one.
 //   goodReadingsNeeded: 5,      // plausible values in a row before Start enables (manual: 1)
 //   pollMs: 1000,               // how often Setup polls source.peek()
-//   renderSetupPanel(container, ctx) -> cleanup | void
+//   renderSetupPanel(container, ctx) -> cleanup | void   // Setup calls cleanup when the panel goes away
 //   createSource(ctx) -> source (see DESIGN.md "Temperature source")
 //   describe(ctx) -> 'Demo: On target, 10x'     // label for the Roast status strip
 //   roastSpeed(ctx) -> 1                         // clock speed (the simulator can be 10)
-//   renderRoastStatus?(container, source) -> cleanup | void   // optional element in the status strip (camera crop strip)
+//   renderRoastStatus?(container, source, { units }) -> cleanup | void   // optional element in the status strip (camera crop strip)
 // }
 //
 // ctx = { state, units, settings, getSource(), changed(), enterReading(f) }
@@ -29,6 +29,7 @@ import { h, segmented } from './dom.js';
 import { createNumpad } from './numpad.js';
 import { PRESETS, createSimulatorSource } from '../sources/simulator-source.js';
 import { createManualSource } from '../sources/manual-source.js';
+import { cameraEntry, cameraSupported } from './camera-panel.js';
 import { tempToUnit, unitLabel } from '../core/units.js';
 
 const registry = new Map();
@@ -42,21 +43,12 @@ export function registerSource(entry) {
 export const listSources = () => order.map((id) => registry.get(id));
 export const getSource = (id) => registry.get(id) || null;
 
-// ---- Camera: a placeholder until the camera agent registers the real entry ----
+// ---- Camera: js/ui/camera-panel.js ----
 
-registerSource({
-  id: 'camera',
-  label: 'Camera',
-  available: false,
-  unavailableReason: "Camera reading isn't available in this build yet. Use Demo or Manual.",
-  renderSetupPanel(container) {
-    container.append(h('div', { class: 'panel-note' },
-      h('p', null, 'Camera reading is coming in the next build.'),
-      h('p', { class: 'muted' }, 'It will read the thermometer display through the phone camera. For now, use Demo to try the app or Manual to type readings.')));
-  },
-  createSource() { throw new Error('Camera source is not available yet'); },
-  describe: () => 'Camera',
-});
+registerSource(cameraEntry);
+
+// The source Setup selects first: Camera when this page can open one, else Demo.
+export const defaultSourceId = () => (cameraSupported() ? 'camera' : 'demo');
 
 // ---- Demo: the simulator ----
 

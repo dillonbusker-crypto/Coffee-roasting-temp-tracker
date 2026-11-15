@@ -90,7 +90,7 @@ export function mountRoast(root, app) {
   const chart = createChart(e.canvas);
   app.activeChart = chart;
   if (info.entry && info.entry.renderRoastStatus) {
-    cleanupStatus = info.entry.renderRoastStatus(e.statusSlot, ctl.source) || null;
+    cleanupStatus = info.entry.renderRoastStatus(e.statusSlot, ctl.source, { units }) || null;
   }
 
   // ---- Actions ----

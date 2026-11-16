@@ -136,7 +136,7 @@ export function preprocess(img, opts = {}) {
   const delta = new Float32Array(n), vis = new Float32Array(n), ink = new Float32Array(n);
   const headRef = Math.max(8, WHITE - bRef);
   for (let i = 0; i < n; i++) {
-    let dl = dRef * Math.min(1, Math.max(0, (WHITE - bg[i]) / headRef));
+    let dl = dRef * Math.min(1, Math.max(0, (WHITE - Math.max(bRef, bg[i] - 0.2 * bRef)) / headRef)); // 20% brightness variation is lighting, not veil
     if (bRef > 245) dl = dRef * (bg[i] > 250 ? 0 : 1); // saturated reference: no veil model, only reject clipped pixels
     delta[i] = dl;
     const snr = dl / sigma;
@@ -293,7 +293,7 @@ const BODY_L = -0.93;   // left edge of the digit body from the right edge, in P
 const THETAS_DEG = [-2.5, 0, 2.5, 5, 7.5, 10, 12.5];
 const LAMBDA = 3.0;   // weight of ink the lattice cannot explain, relative to ink it explains
 const ON_T = 0.8, OFF_T = 0.12; // a segment is clearly on above ON_T, clearly off below OFF_T, otherwise the frame is doubtful
-const FADE_T = 0.72;  // a lit segment must be at least this dark relative to the typical lit segment (frame, or previous frames)
+const FADE_T = 0.6;   // a lit segment must be at least this dark relative to the typical lit segment (frame, or previous frames)
 const VIS_ON = 0.5, VIS_OFF = 0.9; // share of a segment's window that must show enough local contrast to be judged
 // The two hollow centres of a digit (between the left and right strokes, above and below the middle bar) are always background, so
 // they give the local background level right next to each segment, whatever a glare patch is doing to the picture there.
@@ -438,6 +438,17 @@ function findGeometry(planes, h, opts) {
   return { best, picked };
 }
 
+// Share of the pixels in a rectangle (plane coordinates) darker than thr
+function darkShare(data, w, h, x0, y0, x1, y1, thr) {
+  let a = Math.round(x0), b = Math.round(x1), c = Math.round(y0), d = Math.round(y1);
+  if (b <= a) b = a + 1;
+  if (d <= c) d = c + 1;
+  if (a < 0) a = 0; if (c < 0) c = 0; if (b > w) b = w; if (d > h) d = h;
+  let n = 0, tot = 0;
+  for (let y = c; y < d; y++) for (let x = a; x < b; x++) { tot++; if (data[y * w + x] < thr) n++; }
+  return tot ? n / tot : 0;
+}
+
 // ---------- decoding ----------
 
 function none(reason, debug) {
@@ -461,41 +472,37 @@ function classify(pl, g, ev) {
       const bar = s === 0 || s === 3 || s === 6;
       const x0 = xr + q[0] * P, x1 = xr + q[1] * P, ya = g.y0 + q[2] * H, yb = g.y0 + q[3] * H;
       const area = rectArea(x0, ya, x1, yb);
-      let fOn = 0, bsx = 0, bsy = 0;
-      for (const k of [-1, 0, 1]) {
-        const sx = bar ? 0 : k * dx, sy = bar ? k * dy : 0;
-        const f = rectSum(I, w, h, x0 + sx, ya + sy, x1 + sx, yb + sy) / area;
-        if (f > fOn) { fOn = f; bsx = sx; bsy = sy; }
-      }
-      const ex = bar ? 0 : dx, ey = bar ? dy : 0;
-      const wa = rectArea(x0 - ex, ya - ey, x1 + ex, yb + ey);
-      const fOff = rectSum(I, w, h, x0 - ex, ya - ey, x1 + ex, yb + ey) / wa;
-      // Is there enough local contrast to tell? (a glare veil can wash a segment out completely)
-      const visWin = rectSum(ev.vis, ev.w, ev.h, x0 - ex, ya - ey, x1 + ex, yb + ey) / wa;
-      const visCore = rectSum(ev.vis, ev.w, ev.h, x0 + bsx, ya + bsy, x1 + bsx, yb + bsy) / area;
-      // A second, independent opinion from the grey levels: how much darker is the segment than the background right next to it,
-      // compared with the contrast a lit segment must show at that brightness?
+      // Local background (from the hollows next to this segment) and the contrast a lit segment should show here
       const bseg = Math.max(...SEG_HOLLOW[s].map(k => hol[k]));
       const headRef = Math.max(8, 255 - ev.bRef);
-      const dExp = ev.bRef > 245 ? ev.dRef : ev.dRef * Math.min(1, Math.max(0, (255 - bseg) / headRef));
-      let cOn = 0, cMax = -1e9;
+      const dExp = ev.bRef > 245 ? ev.dRef : ev.dRef * Math.min(1, Math.max(0, (255 - Math.max(ev.bRef, bseg - 0.2 * ev.bRef)) / headRef));
+      const thrPix = bseg - 0.5 * dExp; // a pixel darker than this is ink-like here
+      const ex = bar ? 0 : dx, ey = bar ? dy : 0;
+      // Share of the segment's core that is ink-like, with the core allowed to slide a little; and of its whole (dilated) window
+      let fOn = 0, bsx = 0, bsy = 0, cOn = 0, cMax = -1e9;
       for (const k of [-1, 0, 1]) {
         const sx = bar ? 0 : k * dx, sy = bar ? k * dy : 0;
+        const f = darkShare(ev.gd, ev.w, ev.h, x0 + sx, ya + sy, x1 + sx, yb + sy, thrPix);
+        if (f > fOn) { fOn = f; bsx = sx; bsy = sy; }
         const c = bseg - mean(ev.g, x0 + sx, ya + sy, x1 + sx, yb + sy);
-        if (k === (bar ? 0 : 0)) cOn = c;
+        if (k === 0) cOn = c;
         if (c > cMax) cMax = c;
       }
+      const fOff = darkShare(ev.gd, ev.w, ev.h, x0 - ex, ya - ey, x1 + ex, yb + ey, thrPix);
+      // The global ink map's opinion (kept for the overlay and the registration)
+      const fMap = rectSum(I, w, h, x0, ya, x1, yb) / area;
+      const visWin = 1, visCore = 1;
       const seen = dExp >= ev.minDelta; // the contrast a lit segment would show here clears the noise
-      const litByGrey = seen && cMax >= ON_CONTRAST * dExp, unlitByGrey = seen && cMax <= OFF_CONTRAST * dExp;
+      const litByGrey = seen && cMax >= ON_CONTRAST * dExp, unlitByGrey = seen && cOn <= OFF_CONTRAST * dExp;
       let state = '?';
-      if (fOn >= ON_T && visCore >= VIS_ON && litByGrey) state = 'on';
-      else if (fOff <= OFF_T && visWin >= VIS_OFF && unlitByGrey) state = 'off';
+      if (fOn >= ON_T && litByGrey) state = 'on';
+      else if (fOff <= OFF_T && unlitByGrey) state = 'off';
       const hidden = state === '?' && !seen;
       let dn = 0;
       if (state === 'on') { // darkness relative to the contrast this spot should show if lit
         dn = dExp > 0 ? Math.min(1.5, cMax / dExp) : 0;
       }
-      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, visWin, visCore, state, hidden, dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
+      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, hidden, dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
     }
     cells.push({ index: i, x0: xr + BODY_L * P, x1: xr, y0: g.y0, y1: g.y0 + H, segs });
   }
@@ -556,7 +563,8 @@ function decodeAt(planes, best, base, pre, ref) {
   latticeScore(pl, best.xr0, best.y0, best.H, best.P, info);
   // The evidence planes (visibility, darkness, expected ink contrast) in the same straightened frame as the ink map.
   const mk = arr => { const sh = shear(arr, pre.w, pre.h, pl.t); return { I: integral(sh.data, sh.w, sh.h), w: sh.w, h: sh.h }; };
-  const ev = { vis: mk(pre.vis).I, d: mk(pre.d).I, delta: mk(pre.delta).I, g: mk(pre.gray).I, w: pl.w, h: pl.h, dRef: pre.dRef, bRef: pre.bRef, minDelta: 3.5 * pre.sigma };
+  const gsh = shear(pre.gray, pre.w, pre.h, pl.t);
+  const ev = { gd: gsh.data, vis: mk(pre.vis).I, d: mk(pre.d).I, delta: mk(pre.delta).I, g: mk(pre.gray).I, w: pl.w, h: pl.h, dRef: pre.dRef, bRef: pre.bRef, minDelta: 3.5 * pre.sigma };
   const cells = classify(pl, best, ev);
   const debug = Object.assign({}, base, {
     geometry: best, slantDeg: pl.deg, U: info.U, zInk: info.zInk, bodyInk: info.bodyInk,

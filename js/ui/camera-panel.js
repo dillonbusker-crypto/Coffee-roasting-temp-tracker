@@ -131,6 +131,7 @@ const DELIVERY = {
   stopped: 'stopped',
 };
 const yn = (v) => (v ? 'yes' : 'no');
+const ms = (v) => (v == null ? 'n/a' : `${Math.round(v)} ms`);
 
 export function describeDetails(d = {}, ua = '') {
   const lines = [
@@ -142,7 +143,8 @@ export function describeDetails(d = {}, ua = '') {
     `Pictures read per second: ${d.framesPerSecond ?? 0}`,
     `Video clocks: mediaTime ${d.mediaTime || 'n/a'}, currentTime ${d.currentTime || 'n/a'}, decoded frames ${d.decodedFrames || 'n/a'}`,
     `Digit reader, last ${d.readerSeconds || 5} seconds: ${d.readerOk ?? 0} read, ${d.readerDashes ?? 0} dashes, ${d.readerNone ?? 0} unreadable`,
-    `Reader time per picture: ${d.readMsAvg ? `${Math.round(d.readMsAvg)} ms` : 'n/a'}, dropped ${d.framesDropped ?? 0}`,
+    `Reader time per picture, last ${d.readerSeconds || 5} seconds: ${ms(d.readMsAvg)} on average, ${ms(d.readMsMax)} at worst (readable pictures ${ms(d.readMsAvgReadable)}, unreadable ${ms(d.readMsAvgUnreadable)})`,
+    `Reader runs ${d.readsPerSecond ?? 0} times a second. Magnifier updates ${d.magnifierPerSecond ?? 0} times a second. Pictures skipped: ${d.skipped5s ?? 0} in the last ${d.readerSeconds || 5} seconds, ${d.framesDropped ?? 0} in all.`,
     `Judged stalled now: ${yn(d.stalledNow)} (${d.stalls ?? 0} stalls so far)`,
     `Exposure lock: ${d.exposureLock || 'n/a'}. Focus lock: ${d.focusLock || 'n/a'}.`,
     `Device: ${deviceLabel(ua)}`,
@@ -314,8 +316,7 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
   function onFrame(f) {
     const img = f.imageData;
     if (crop.width !== img.width || crop.height !== img.height) { crop.width = img.width; crop.height = img.height; }
-    cropCtx.putImageData(img, 0, 0);
-    renderRead();
+    cropCtx.putImageData(img, 0, 0);       // draw at once; the read of this picture may come later or be skipped
   }
 
   function attach(src) {
@@ -324,6 +325,7 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
     offs = [
       src.onState(() => renderState()),
       src.onFrame(onFrame),
+      src.onRead(() => renderRead()),
     ];
     renderState();
   }

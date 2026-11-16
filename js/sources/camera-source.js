@@ -83,6 +83,7 @@ export function createCameraSource({
   mediaDevices = () => (typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined),
   doc = typeof document !== 'undefined' ? document : null,
   timers = { setInterval: (f, ms) => globalThis.setInterval(f, ms), clearInterval: (id) => globalThis.clearInterval(id) },
+  defer = (fn) => globalThis.setTimeout(fn, 0),   // lets the page paint between grabbing a picture and reading it
   monitorMs = 500,
 } = {}) {
   const readerCfg = settings.reader || {};
@@ -102,14 +103,22 @@ export function createCameraSource({
   let frames = [];                // [{ at, res }]
   let takenAt = -Infinity;        // frames at or before this time went into an earlier second
   let hint = null, misses = 0;
-  let busy = false;
+  let reading = false;            // readDisplay is running
+  let pending = null;             // the newest picture waiting for its read: { img, at, crop }
+  let cooldownUntil = 0;          // after a read slower than a frame period, skip pictures until then
   let monitor = null;
   let badSince = null, retryDelay = RETRY_BASE_MS, nextRetryAt = 0, liveAt = 0, goodSince = 0, visRetry = false, reopens = 0;
   let visHandler = null;
   const stateListeners = new Set();
-  const frameListeners = new Set();
+  const frameListeners = new Set();   // called for every grabbed picture, before it is read (the magnifier draws here)
+  const readListeners = new Set();    // called after each read, with the latest result
   const perf = { frames: 0, dropped: 0, errors: 0, msLast: 0, msAvg: 0, msMax: 0 };
-  let last = null;                // latest frame: { imageData, result, crop, at }
+  let last = null;                // latest grabbed picture: { imageData, result, crop, at }; result is the latest read, maybe of an earlier picture
+  let lastResult = null;
+  const reads = [];               // [{ at, ms, readable }] last 5 s
+  const drops = [];               // times pictures were skipped, last 5 s
+  const shown = [];               // times the picture listeners were called, last 5 s
+  const trim = (arr, t) => { while (arr.length && (arr[0].at ?? arr[0]) < t - FRAME_KEEP_MS) arr.shift(); };
 
   function setState(next, msg = '') {
     if (state === next && message === msg) return;
@@ -119,32 +128,55 @@ export function createCameraSource({
 
   // ---- frames ----
 
+  // Draw first, read after. A grabbed picture goes to the listeners at once, so the magnifier follows the camera however
+  // slow the reader is. Reading happens on the next turn of the event loop and only for the newest picture: one that is
+  // still waiting when a newer one arrives is replaced, and after a read slower than a frame period the pictures are
+  // skipped for as long again, so a slow phone spends at most half its time reading.
   function onFrame(img, info) {
     if (state === 'stopped' || state === 'idle') return;
     if (info && info.stalled) return;               // a repeated, stale picture: never reads
-    if (busy) { perf.dropped++; return; }           // never queue frames
-    busy = true;
+    const at = now();
+    last = { imageData: img, result: lastResult, crop: (info && info.crop) || cam.lastCrop || null, at };
+    if (frameListeners.size) { shown.push(at); trim(shown, at); }
+    for (const fn of [...frameListeners]) { try { fn(last); } catch { /* ignore */ } }
+    if (reading || at < cooldownUntil) { perf.dropped++; drops.push(at); trim(drops, at); return; }
+    if (pending) { perf.dropped++; drops.push(at); trim(drops, at); }   // an older picture never got read
+    const queued = !!pending;
+    pending = { img, at, crop: last.crop };
+    if (!queued) defer(runRead);
+  }
+
+  function runRead() {
+    const f = pending;
+    pending = null;
+    if (!f || state === 'stopped' || state === 'idle') return;
+    reading = true;
     const t0 = now();
     let res;
     try {
-      res = readDisplay(img, { hint });
+      res = readDisplay(f.img, { hint });
     } catch {
       perf.errors++;
       res = { status: 'none', value: null, digits: [], confidence: 0, debug: { reason: 'reader error' } };
     }
-    const at = now();
+    const t1 = now();
+    reading = false;
+    const ms = t1 - t0;
     perf.frames++;
-    perf.msLast = at - t0;
-    perf.msAvg = perf.frames === 1 ? perf.msLast : perf.msAvg * 0.9 + perf.msLast * 0.1;
-    perf.msMax = Math.max(perf.msMax, perf.msLast);
+    perf.msLast = ms;
+    perf.msAvg = perf.frames === 1 ? ms : perf.msAvg * 0.9 + ms * 0.1;
+    perf.msMax = Math.max(perf.msMax, ms);
+    reads.push({ at: t1, ms, readable: !!res && (res.status === 'ok' || res.status === 'dashes') });
+    trim(reads, t1);
+    if (ms > 1000 / fps) cooldownUntil = t1 + ms;
     // The reader can start its search where the digits were last found. Drop the hint after a run of misses.
     const hintOut = res && res.debug && res.debug.hintOut;
     if (hintOut) { hint = hintOut; misses = 0; } else if (++misses >= 8) hint = null;
-    frames.push({ at, res });
-    while (frames.length && frames[0].at < at - FRAME_KEEP_MS) frames.shift();
-    last = { imageData: img, result: res, crop: (info && info.crop) || cam.lastCrop || null, at };
-    busy = false;
-    for (const fn of [...frameListeners]) { try { fn(last); } catch { /* ignore */ } }
+    frames.push({ at: f.at, res });
+    while (frames.length && frames[0].at < t1 - FRAME_KEEP_MS) frames.shift();
+    lastResult = res;
+    if (last && last.at === f.at) last.result = res;
+    for (const fn of [...readListeners]) { try { fn(last); } catch { /* ignore */ } }
   }
 
   function startLoop() {
@@ -282,15 +314,24 @@ export function createCameraSource({
       const recent = frames.filter((f) => f.at >= t - FRAME_KEEP_MS);
       const count = (st) => recent.filter((f) => f.res && f.res.status === st).length;
       const base = cam.diagnostics ? cam.diagnostics() : {};
+      trim(reads, t); trim(drops, t); trim(shown, t);
+      const win = Math.max(1, Math.min(FRAME_KEEP_MS / 1000, (t - liveAt) / 1000));
+      const avg = (a) => (a.length ? a.reduce((x, r) => x + r.ms, 0) / a.length : null);
+      const okReads = reads.filter((r) => r.readable), badReads = reads.filter((r) => !r.readable);
       return {
         ...base, state, message, reopens,
         readerOk: count('ok'), readerDashes: count('dashes'), readerNone: recent.length - count('ok') - count('dashes'),
         readerSeconds: FRAME_KEEP_MS / 1000,
-        readMsAvg: perf.msAvg, framesDropped: perf.dropped,
+        readMsAvg: avg(reads), readMsMax: reads.length ? Math.max(...reads.map((r) => r.ms)) : null,
+        readMsAvgReadable: avg(okReads), readMsAvgUnreadable: avg(badReads),
+        readsPerSecond: Math.round((reads.length / win) * 10) / 10,
+        magnifierPerSecond: Math.round((shown.length / win) * 10) / 10,
+        skipped5s: drops.length, framesDropped: perf.dropped,
       };
     },
     onState(fn) { stateListeners.add(fn); return () => stateListeners.delete(fn); },
     onFrame(fn) { frameListeners.add(fn); return () => frameListeners.delete(fn); },
+    onRead(fn) { readListeners.add(fn); return () => readListeners.delete(fn); },
     checkNow,
 
     /** Open the camera. Idempotent: with the stream already up it only resets the per-roast state. */
@@ -332,7 +373,7 @@ export function createCameraSource({
       cam.stopLoop();
       try { cam.stop(); } catch { /* ignore */ }
       everLive = false;
-      frames = []; last = null; hint = null; badSince = null;
+      frames = []; last = null; pending = null; hint = null; badSince = null;
       setState('stopped');
     },
 
@@ -388,7 +429,7 @@ export function createCameraSource({
       return { secondsRead: h.secondsRead, rejected: h.rejected, secondsMissing: h.secondsMissing, ...detail(h) };
     },
 
-    setBox(b) { cam.setBox(b); frames = []; hint = null; misses = 0; },
+    setBox(b) { cam.setBox(b); frames = []; pending = null; hint = null; misses = 0; },
     readerBox() { return cam.readerBox(); },
     setControl() {},
   };

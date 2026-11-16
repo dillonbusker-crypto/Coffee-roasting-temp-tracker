@@ -1,6 +1,6 @@
 # Roast Tracker: build status
 
-Last updated: Nov 15, 2026, 07:20 UTC. This file is the hand-off log. Update it whenever a milestone lands.
+Last updated: Nov 16, 2026. This file is the hand-off log. Update it whenever a milestone lands.
 
 ## Where things are
 
@@ -22,6 +22,10 @@ Last updated: Nov 15, 2026, 07:20 UTC. This file is the hand-off log. Update it 
 1. **First run on the iPhone.** Open the live site in Safari, allow the camera, and check the list under "Check on the real phone" below.
 2. **Run the user's test media through the reader.** About 10 photos and a 1-minute video, due Nov 16. Step 1 stays provisional until they meet the spec's accuracy target. Add them to `test/fixtures/` as regression cases. The reader has only seen the digits 0, 1, 2, 4, 5, 6, 7 and the dashes on the real display; check how a real 3, 8 and 9 are drawn (a 9 without its bottom bar would be missed, not misread).
 3. **Field test and tuning.** Replace the provisional 410°F first-crack reading with the first logged roast. Tune pace-cue timing against real curves. Check the roast review's rate-of-rise findings against real roasts: a normal first-crack bump may read as a "flick", noisy readings may read as a "crash", and a slow first minute may read as a stall. The thresholds are named constants at the top of `js/core/review.js`.
+
+## Found on the real phone
+
+- **Camera stall loop (fixed, awaiting confirmation on the phone).** On the user's iPhone the Setup camera panel looped between "The camera stopped sending pictures" and a one-second reconnect. Cause: `js/reader/camera.js` judged the stream alive only while the video clock advanced, and the stream was reopened every couple of seconds when it didn't. Now a stall needs positive evidence, frames are read on a timer when Safari's frame callback doesn't fire, and reopening is rare with back-off. Whether Safari really freezes that clock is unconfirmed; the "Camera details" section at the bottom of the camera panel (with a Copy button) shows what the phone reports.
 
 ## Check on the real phone
 

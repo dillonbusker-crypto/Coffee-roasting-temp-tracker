@@ -55,6 +55,7 @@ function world(opts = {}) {
     doc: opts.doc || null,
     timers: { setInterval: () => 1, clearInterval() {} },
     requireTap: !!opts.requireTap,
+    defer: opts.defer || ((fn) => fn()),
   });
   return w;
 }
@@ -205,7 +206,7 @@ test('frames flagged stalled are never read, and a frame is dropped while the pr
   const w = world();
   let inner = null;
   w.source = createCameraSource({
-    settings: {}, video: w.cam.video, createCamera: () => w.cam, now: () => w.ms, doc: null, mediaDevices: () => ({ getUserMedia() {} }),
+    settings: {}, video: w.cam.video, createCamera: () => w.cam, now: () => w.ms, doc: null, mediaDevices: () => ({ getUserMedia() {} }), defer: (fn) => fn(),
     timers: { setInterval: () => 1, clearInterval() {} },
     readDisplay: (img) => { if (inner) { const f = inner; inner = null; f(); } return { ...img, debug: {} }; },
   });
@@ -221,7 +222,7 @@ test('frames flagged stalled are never read, and a frame is dropped while the pr
 test('a reader that throws gives an unreadable frame, not a dead loop', async () => {
   const w = world();
   w.source = createCameraSource({
-    settings: {}, video: w.cam.video, createCamera: () => w.cam, now: () => w.ms, doc: null, mediaDevices: () => ({ getUserMedia() {} }),
+    settings: {}, video: w.cam.video, createCamera: () => w.cam, now: () => w.ms, doc: null, mediaDevices: () => ({ getUserMedia() {} }), defer: (fn) => fn(),
     timers: { setInterval: () => 1, clearInterval() {} },
     readDisplay: () => { throw new Error('boom'); },
   });
@@ -434,4 +435,59 @@ test('diagnostics() reports reader frame counts and passes the camera facts thro
   const d = w.source.diagnostics();
   assert.equal(d.delivery, 'rvfc');
   assert.deepEqual([d.readerOk, d.readerDashes, d.readerNone, d.reopens, d.state], [4, 4, 0, 0, 'live']);
+});
+
+// A source with a deferred reader: grabbing and reading are separate turns, and the reader can be slow.
+function slowWorld(readMs) {
+  const queue = [];
+  const w = world({ defer: (fn) => queue.push(fn) });
+  const reads = [];
+  w.source = createCameraSource({
+    settings: { reader: { fps: 4 } }, video: w.cam.video, createCamera: () => w.cam, now: () => w.ms, doc: null,
+    mediaDevices: () => ({ getUserMedia() {} }), timers: { setInterval: () => 1, clearInterval() {} },
+    defer: (fn) => queue.push(fn),
+    readDisplay: (img) => { reads.push(img.value); w.advance(typeof readMs === 'function' ? readMs(img) : readMs); return { ...img, debug: {} }; },
+  });
+  w.flush = () => { while (queue.length) queue.shift()(); };
+  w.reads = reads;
+  return w;
+}
+
+test('a grabbed picture reaches the listeners before it is read, and only the newest waiting picture is read', async () => {
+  const w = slowWorld(5);
+  await w.source.start();
+  const drawn = [];
+  w.source.onFrame((f) => drawn.push(f.imageData.value));
+  w.advance(250); w.cam.frame({ status: 'ok', value: 70 });
+  assert.deepEqual(drawn, [70]);
+  assert.deepEqual(w.reads, [], 'not read yet: the page can paint first');
+  w.advance(250); w.cam.frame({ status: 'ok', value: 71 });      // a newer picture arrives before the read ran
+  assert.deepEqual(drawn, [70, 71]);
+  w.flush();
+  assert.deepEqual(w.reads, [71], 'the stale picture was replaced');
+  assert.equal(w.source.perf.dropped, 1);
+  assert.equal(w.source.peek().value, 71);
+});
+
+test('after a read slower than the frame period the pictures are skipped for as long again, yet the listeners still see every one', async () => {
+  const w = slowWorld((img) => (img.value === 90 ? 700 : 5));
+  await w.source.start();
+  const drawn = [];
+  w.source.onFrame((f) => drawn.push(f.imageData.value));
+  w.advance(250); w.cam.frame({ status: 'ok', value: 90 }); w.flush();   // takes 700 ms
+  for (const v of [91, 92, 93]) { w.advance(250); w.cam.frame({ status: 'ok', value: v }); w.flush(); }   // inside the cooldown
+  assert.deepEqual(drawn, [90, 91, 92, 93], 'the magnifier is never starved');
+  assert.deepEqual(w.reads, [90, 93], 'the 700 ms read was followed by 700 ms of skipping: 91 and 92 were not read');
+});
+
+test('diagnostics() separates the cost of readable and unreadable pictures and counts the magnifier updates', async () => {
+  const w = slowWorld((img) => (img.status === 'none' ? 40 : 6));
+  await w.source.start();
+  w.source.onFrame(() => {});
+  for (let i = 0; i < 8; i++) { w.advance(1000); w.cam.frame(i % 2 ? { status: 'none', value: null } : { status: 'ok', value: 80 }); w.flush(); }
+  const d = w.source.diagnostics();
+  assert.equal(Math.round(d.readMsAvgReadable), 6);
+  assert.equal(Math.round(d.readMsAvgUnreadable), 40);
+  assert.equal(d.readMsMax, 40);
+  assert.ok(d.magnifierPerSecond > 0.5 && d.readsPerSecond > 0.5);
 });

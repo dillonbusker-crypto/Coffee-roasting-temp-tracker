@@ -127,6 +127,9 @@ readDisplay(imageData, opts?) ->
 
 - Input is the user's crop. It contains the THERMO TEMP digits of probe 1 with some margin and nothing else that is digit-sized.
 - A frame is `ok` only if every segment of every digit is clearly on or clearly off and each pattern is a real digit. Anything doubtful is `none`. A missed frame is fine; a wrong value is not.
+- Each segment is judged against the local background of its own digit (a plane fitted to the digit's cell, ignoring ink), and the contrast a lit segment should show is scaled by the headroom to white, because glare adds light. A segment that cannot be proven lit or unlit is doubtful. A lattice window outside the crop is doubtful too.
+- Lit segments must look alike within a digit and across the three digits; a lighter one means the display is half way through a change. This is checked inside one frame only, never against earlier frames, so a change of camera exposure between frames cannot cause a miss. `opts.hint` carries geometry only.
+- `debug.reason` says why a frame is `none`. `js/sources/camera-reasons.js` turns each reason into the wording shown to the user; a new reason needs an entry there.
 
 ### `js/reader/filter.js` (pure)
 

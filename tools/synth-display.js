@@ -365,6 +365,8 @@ export function addConditions(rng, p, spec) {
 /** Named condition sets used by the tests. */
 export const CONDITIONS = {
   exposure: { exposure: { independent: true } },
+  glareLight: { glare: [0.08, 0.25] },           // faint veil
+  glareMid: { glare: [0.25, 0.42] },
   glare: { glare: [0.25, 0.6] },                 // a person still reads every segment comfortably
   glareHard: { glare: [0.6, 0.85] },             // contrast mostly gone under the glare
   glareGone: { glare: [0.92, 1.0], glareCount: 1 },

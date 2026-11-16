@@ -8,6 +8,8 @@
 
 const MISSES = [
   { match: /cut off at the right edge/, label: 'digit cut off', text: 'A digit is cut off at the right edge.', hint: 'Move the box right.' },
+  { match: /cut off at the edge/, label: 'digit cut off', text: 'A digit is cut off at the edge of the box.', hint: 'Make the box bigger, with room on the left for a third digit.' },
+  { match: /washed out by glare/, label: 'glare', text: 'Glare is hiding part of a digit.', hint: 'Tilt the thermometer or the phone a little, or shade the display.' },
   { match: /^low contrast/, label: 'too faint', text: 'The digits are too faint.', hint: 'Add light or reduce glare.' },
   { match: /^(ambiguous segment|segments mid-fade|invalid pattern|bad hundreds digit)/, label: 'unclear digit', text: 'Part of a digit is unclear.', hint: 'Check for glare, focus and that the phone is square-on.' },
   { match: /^(no digit found|too few digits|ones digit blank|gap in digits)/, label: 'no digits found', text: 'No digits found in the box.', hint: 'Move the box over the top-right number.' },

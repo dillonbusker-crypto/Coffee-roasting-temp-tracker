@@ -5,6 +5,8 @@ import { explainMiss, explainRejection, slug } from '../../js/sources/camera-rea
 test('every reason the reader gives maps to a plain label, text and hint', () => {
   const cases = [
     ['digit cut off at the right edge of the crop', 'digit cut off', 'A digit is cut off at the right edge.', 'Move the box right.'],
+    ['digit cut off at the edge of the crop', 'digit cut off', 'A digit is cut off at the edge of the box.', 'Make the box bigger, with room on the left for a third digit.'],
+    ['segment washed out by glare', 'glare', 'Glare is hiding part of a digit.', 'Tilt the thermometer or the phone a little, or shade the display.'],
     ['low contrast', 'too faint', 'The digits are too faint.', 'Add light or reduce glare.'],
     ['ambiguous segment', 'unclear digit', 'Part of a digit is unclear.', 'Check for glare, focus and that the phone is square-on.'],
     ['segments mid-fade', 'unclear digit'],

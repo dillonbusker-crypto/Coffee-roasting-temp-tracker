@@ -107,16 +107,22 @@ export function preprocess(img, opts = {}) {
   const thr = (bestT + 1) / NB * 1.3;
   const d = new Float32Array(n); // darkness in grey levels: how far a pixel lies below its local background
   for (let i = 0; i < n; i++) d[i] = bg[i] - g[i];
-  // The ink's own contrast, measured where it is strongest (the upper quartile of the ink pixels), and the background level there.
-  const inkD = [], inkIdx = [];
-  for (let i = 0; i < n; i++) if (ratio[i] < thr) { inkD.push(d[i]); inkIdx.push(i); }
-  const inkFrac = inkD.length / n;
+  const inkIdx = [];
+  for (let i = 0; i < n; i++) if (ratio[i] < thr) inkIdx.push(i);
+  // The ink's own contrast where the picture is least veiled. A glare veil only ever brightens, so the unveiled background level is
+  // a low percentile of the background map, and the contrast the ink shows on that level (upper quartile of those ink pixels) is
+  // what a lit segment looks like when nothing washes it out.
+  const inkFrac = inkIdx.length / n;
   let dRef = 0, bRef = 255, contrast = 0;
-  if (inkD.length >= 8) {
-    const sorted = Float32Array.from(inkD).sort();
-    dRef = sorted[Math.floor(sorted.length * 0.75)];
-    const top = []; for (let k = 0; k < inkD.length; k++) if (inkD[k] >= dRef) top.push(bg[inkIdx[k]]);
-    top.sort((x, y) => x - y); bRef = top[Math.floor(top.length / 2)] || 255;
+  if (inkIdx.length >= 8) {
+    const bgSorted = Float32Array.from(bg).sort();
+    const bLow = bgSorted[Math.floor(n * 0.1)];
+    let sel = inkIdx.filter(i => bg[i] <= bLow * 1.12 + 2);
+    if (sel.length < Math.max(8, 0.1 * inkIdx.length)) sel = inkIdx.slice().sort((x, y) => bg[x] - bg[y]).slice(0, Math.max(8, Math.floor(inkIdx.length * 0.25)));
+    const ds = Float32Array.from(sel.map(i => d[i])).sort();
+    dRef = ds[Math.floor(ds.length * 0.75)];
+    const bs = Float32Array.from(sel.map(i => bg[i])).sort();
+    bRef = bs[Math.floor(bs.length / 2)];
     contrast = dRef / (bRef + 1);
   }
   // Sensor/texture noise in grey levels: the residual of a 3x3 mean over background pixels away from any ink
@@ -136,7 +142,7 @@ export function preprocess(img, opts = {}) {
   const delta = new Float32Array(n), vis = new Float32Array(n), ink = new Float32Array(n);
   const headRef = Math.max(8, WHITE - bRef);
   for (let i = 0; i < n; i++) {
-    let dl = dRef * Math.min(1, Math.max(0, (WHITE - Math.max(bRef, bg[i] - 0.2 * bRef)) / headRef)); // 20% brightness variation is lighting, not veil
+    let dl = dRef * Math.min(1, Math.max(0, (WHITE - Math.max(bRef * 0.9, bg[i])) / headRef)); 
     if (bRef > 245) dl = dRef * (bg[i] > 250 ? 0 : 1); // saturated reference: no veil model, only reject clipped pixels
     delta[i] = dl;
     const snr = dl / sigma;
@@ -293,13 +299,16 @@ const BODY_L = -0.93;   // left edge of the digit body from the right edge, in P
 const THETAS_DEG = [-2.5, 0, 2.5, 5, 7.5, 10, 12.5];
 const LAMBDA = 3.0;   // weight of ink the lattice cannot explain, relative to ink it explains
 const ON_T = 0.8, OFF_T = 0.12; // a segment is clearly on above ON_T, clearly off below OFF_T, otherwise the frame is doubtful
+const LIT_MAX = 2.0, LIT_SPREAD = 3.0; // lit segments' contrast relative to the prediction: never above, and never spread wider than this
+const MAP_ON = 0.4, MAP_OFF = 0.3; // how far the global ink map may disagree with the local grey-level evidence
+const CELL_FADE_T = 0.5;  // across digits (real photo: worst 0.61, synthetic: 0.68)
 const FADE_T = 0.6;   // a lit segment must be at least this dark relative to the typical lit segment (frame, or previous frames)
 const VIS_ON = 0.5, VIS_OFF = 0.9; // share of a segment's window that must show enough local contrast to be judged
 // The two hollow centres of a digit (between the left and right strokes, above and below the middle bar) are always background, so
 // they give the local background level right next to each segment, whatever a glare patch is doing to the picture there.
 const HOLLOW_U = [-0.60, -0.34, 0.22, 0.38], HOLLOW_L = [-0.60, -0.34, 0.62, 0.78];
 const SEG_HOLLOW = [[0], [0], [1], [1], [1], [0], [0, 1]]; // which hollow(s) border segment a..g (0 upper, 1 lower)
-const ON_CONTRAST = 0.55, OFF_CONTRAST = 0.3; // lit: dark by at least this share of the contrast a lit segment should show here; unlit: at most
+const ON_CONTRAST = 0.62, ON_CONTRAST_VEILED = 0.5, OFF_CONTRAST = 0.1; // lit: dark by at least this share of the contrast a lit segment should show here; unlit: at most
 const NEIGHBOUR_T = 0.3; // ink this dark (relative to the lit segments) right of the ones cell means a digit was left out
 const ON_LOOSE = 0.5; // registration only: a segment counts as lit above this
 
@@ -431,21 +440,55 @@ function findGeometry(planes, h, opts) {
   }
   // stage 2: hill-climb each candidate on the full lattice
   let best = null;
+  const refined = [];
   for (const c of picked) {
     const cur = refine(planes, { pi: c.pi, xr0: c.xr, y0: c.y0, H: c.H, rho: RHO });
+    refined.push(cur);
     if (cur.score > (best ? best.score : -Infinity)) best = cur;
   }
-  return { best, picked };
+  // near-ties (the digit height is loosely pinned when a digit has no bottom bar): keep a few distinct alternatives, best first
+  refined.sort((a, b) => b.score - a.score);
+  const alts = [];
+  for (const c of refined) {
+    if (alts.length >= 2) break;
+    if (best && c.score < best.score - 0.04 * Math.abs(best.score)) break;
+    if (alts.some(a => Math.abs(a.H - c.H) < 3 && Math.abs(a.y0 - c.y0) < 3 && Math.abs(a.xr0 - c.xr0) < 3 && a.pi === c.pi)) continue;
+    alts.push(c);
+  }
+  return { best, picked, alts };
+}
+
+// A high percentile (the local background level) of the grey values in a rectangle of the straightened plane
+function winPercentile(data, cov, w, h, x0, y0, x1, y1, p) {
+  let a = Math.max(0, Math.round(x0)), b = Math.min(w, Math.round(x1)), c = Math.max(0, Math.round(y0)), d = Math.min(h, Math.round(y1));
+  const hist = new Int32Array(256);
+  let n = 0;
+  for (let y = c; y < d; y++) for (let x = a; x < b; x++) { if (cov[y * w + x] < 0.5) continue; const v = data[y * w + x]; hist[v < 0 ? 0 : v > 255 ? 255 : v | 0]++; n++; }
+  if (!n) return 0;
+  let acc = 0; const target = n * p;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= target) return v; }
+  return 255;
+}
+
+// Share of the pixels in a rectangle darker than the local background (planeAt) by at least `drop`
+function darkShareP(ev, x0, y0, x1, y1, planeAt, drop) {
+  let a = Math.round(x0), b = Math.round(x1), c = Math.round(y0), d = Math.round(y1);
+  if (b <= a) b = a + 1;
+  if (d <= c) d = c + 1;
+  if (a < 0) a = 0; if (c < 0) c = 0; if (b > ev.w) b = ev.w; if (d > ev.h) d = ev.h;
+  let n = 0, tot = 0;
+  for (let y = c; y < d; y++) for (let x = a; x < b; x++) { if (ev.gc[y * ev.w + x] < 0.5) continue; tot++; if (ev.gd[y * ev.w + x] < planeAt(x, y) - drop) n++; }
+  return tot ? n / tot : 0;
 }
 
 // Share of the pixels in a rectangle (plane coordinates) darker than thr
-function darkShare(data, w, h, x0, y0, x1, y1, thr) {
+function darkShare(data, cov, w, h, x0, y0, x1, y1, thr) {
   let a = Math.round(x0), b = Math.round(x1), c = Math.round(y0), d = Math.round(y1);
   if (b <= a) b = a + 1;
   if (d <= c) d = c + 1;
   if (a < 0) a = 0; if (c < 0) c = 0; if (b > w) b = w; if (d > h) d = h;
   let n = 0, tot = 0;
-  for (let y = c; y < d; y++) for (let x = a; x < b; x++) { tot++; if (data[y * w + x] < thr) n++; }
+  for (let y = c; y < d; y++) for (let x = a; x < b; x++) { if (cov[y * w + x] < 0.5) continue; tot++; if (data[y * w + x] < thr) n++; }
   return tot ? n / tot : 0;
 }
 
@@ -457,6 +500,48 @@ function none(reason, debug) {
 
 // Strict classification of every segment at a fixed geometry. A segment is lit only if a core-sized patch (allowed to slide a
 // little) is solidly inked, and unlit only if its whole (slightly dilated) window is clean; anything between is doubtful.
+// Fit the local background of one cell as a tilted plane in the straightened grey plane, ignoring ink: a glare edge or a lighting
+// gradient is (at the scale of one digit) a ramp, and a ramp is not ink. Returns { a, b, c, n } for plane = a + b*u + c*v where
+// u = (x - ux) / P and v = (y - vy) / H, or null if too little picture is available.
+function fitCellPlane(ev, xl, xr, yt, yb, ux, vy, P, H, dRef, bRef) {
+  const x0 = Math.max(0, Math.floor(xl)), x1 = Math.min(ev.w, Math.ceil(xr)), y0 = Math.max(0, Math.floor(yt)), y1 = Math.min(ev.h, Math.ceil(yb));
+  if (x1 - x0 < 4 || y1 - y0 < 4) return null;
+  const px = [], py = [], pg = [];
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (ev.gc[y * ev.w + x] > 0.5) { px.push((x - ux) / P); py.push((y - vy) / H); pg.push(ev.gd[y * ev.w + x]); }
+  const n = px.length;
+  if (n < 40) return null;
+  const med = Float32Array.from(pg).sort()[n >> 1];
+  let keep = new Uint8Array(n);
+  for (let i = 0; i < n; i++) keep[i] = pg[i] >= med ? 1 : 0; // start from the brighter half
+  let plane = null;
+  for (let iter = 0; iter < 5; iter++) {
+    let s00 = 0, s01 = 0, s02 = 0, s11 = 0, s12 = 0, s22 = 0, t0 = 0, t1 = 0, t2 = 0, m = 0;
+    for (let i = 0; i < n; i++) {
+      if (!keep[i]) continue;
+      const u = px[i], v = py[i], g = pg[i];
+      s00 += 1; s01 += u; s02 += v; s11 += u * u; s12 += u * v; s22 += v * v; t0 += g; t1 += g * u; t2 += g * v; m++;
+    }
+    if (m < 20) return null;
+    // solve [[s00 s01 s02] [s01 s11 s12] [s02 s12 s22]] * [a b c] = [t0 t1 t2]
+    const det = s00 * (s11 * s22 - s12 * s12) - s01 * (s01 * s22 - s12 * s02) + s02 * (s01 * s12 - s11 * s02);
+    if (Math.abs(det) < 1e-9) return null;
+    const a = (t0 * (s11 * s22 - s12 * s12) - s01 * (t1 * s22 - s12 * t2) + s02 * (t1 * s12 - s11 * t2)) / det;
+    const b = (s00 * (t1 * s22 - s12 * t2) - t0 * (s01 * s22 - s12 * s02) + s02 * (s01 * t2 - t1 * s02)) / det;
+    const c = (s00 * (s11 * t2 - t1 * s12) - s01 * (s01 * t2 - t1 * s02) + t0 * (s01 * s12 - s11 * s02)) / det;
+    plane = { a, b, c, n: m };
+    // ink here would be this much darker than the plane: the contrast scales with the headroom above the background
+    const dg = dRef * Math.min(1.3, Math.max(0.05, (255 - Math.max(0.9 * bRef, a)) / Math.max(8, 255 - bRef)));
+    let changed = 0;
+    for (let i = 0; i < n; i++) {
+      const r = pg[i] - (a + b * px[i] + c * py[i]);
+      const k = r > -0.3 * dg && r < 0.6 * dg ? 1 : 0;
+      if (k !== keep[i]) { keep[i] = k; changed++; }
+    }
+    if (!changed) break;
+  }
+  return plane;
+}
+
 function classify(pl, g, ev) {
   const { I, w, h } = pl;
   const H = g.H, P = g.P;
@@ -466,43 +551,76 @@ function classify(pl, g, ev) {
   for (let i = 0; i < 3; i++) {
     const xr = g.xr0 - i * P;
     const segs = [];
+    const pln = fitCellPlane(ev, xr + (BODY_L - 0.08) * P, xr + 0.08 * P, g.y0 - 0.08 * H, g.y0 + 1.08 * H, xr - 0.5 * P, g.y0 + 0.5 * H, P, H, ev.dRef, ev.bRef);
     const hol = [HOLLOW_U, HOLLOW_L].map(q => mean(ev.g, xr + q[0] * P, g.y0 + q[2] * H, xr + q[1] * P, g.y0 + q[3] * H));
+    // The hollows are background by construction, so they check the fitted plane: if the plane does not pass through them, a glare
+    // streak or spot has pulled it away from the real background and the cell's segments cannot be judged against it.
+    let planeBad = !pln;
+    if (pln) {
+      const cc = pln.a, headR = Math.max(8, 255 - ev.bRef);
+      const rCell = ev.bRef > 245 ? ev.dRef : ev.dRef * Math.min(1.3, Math.max(0.05, (255 - Math.max(ev.bRef * 0.9, cc)) / headR));
+      [HOLLOW_U, HOLLOW_L].forEach((q, k) => {
+        const cx = xr + (q[0] + q[1]) / 2 * P, cy = g.y0 + (q[2] + q[3]) / 2 * H;
+        const pv = pln.a + pln.b * (cx - (xr - 0.5 * P)) / P + pln.c * (cy - (g.y0 + 0.5 * H)) / H;
+        if (Math.abs(hol[k] - pv) > Math.max(0.35 * rCell, 4 * ev.sigma)) planeBad = true;
+      });
+    }
     for (let s = 0; s < 7; s++) {
       const q = SEG[s];
       const bar = s === 0 || s === 3 || s === 6;
       const x0 = xr + q[0] * P, x1 = xr + q[1] * P, ya = g.y0 + q[2] * H, yb = g.y0 + q[3] * H;
       const area = rectArea(x0, ya, x1, yb);
       // Local background (from the hollows next to this segment) and the contrast a lit segment should show here
-      const bseg = Math.max(...SEG_HOLLOW[s].map(k => hol[k]));
+      const cxm = (x0 + x1) / 2, cym = (ya + yb) / 2;
+      const planeAt = (x, y) => pln ? pln.a + pln.b * (x - (xr - 0.5 * P)) / P + pln.c * (y - (g.y0 + 0.5 * H)) / H : Math.max(...SEG_HOLLOW[s].map(k => hol[k]));
+      const bseg = planeAt(cxm, cym);
       const headRef = Math.max(8, 255 - ev.bRef);
-      const dExp = ev.bRef > 245 ? ev.dRef : ev.dRef * Math.min(1, Math.max(0, (255 - Math.max(ev.bRef, bseg - 0.2 * ev.bRef)) / headRef));
-      const thrPix = bseg - 0.5 * dExp; // a pixel darker than this is ink-like here
+      // (when the unveiled background itself is bright, the exposure is high and the headroom model is unreliable: keep a floor)
+      const dExp = ev.bRef > 245 ? ev.dRef : ev.dRef * Math.min(1.3, Math.max(ev.bRef > 190 ? 0.5 : 0, (255 - Math.max(ev.bRef * 0.9, bseg)) / headRef));
       const ex = bar ? 0 : dx, ey = bar ? dy : 0;
+      const wa0 = rectArea(x0 - ex, ya - ey, x1 + ex, yb + ey);
       // Share of the segment's core that is ink-like, with the core allowed to slide a little; and of its whole (dilated) window
-      let fOn = 0, bsx = 0, bsy = 0, cOn = 0, cMax = -1e9;
+      let fOn = 0, bsx = 0, bsy = 0, cOn = 0, cMax = -1e9, coreOutside = false;
       for (const k of [-1, 0, 1]) {
         const sx = bar ? 0 : k * dx, sy = bar ? k * dy : 0;
-        const f = darkShare(ev.gd, ev.w, ev.h, x0 + sx, ya + sy, x1 + sx, yb + sy, thrPix);
+        const f = darkShareP(ev, x0 + sx, ya + sy, x1 + sx, yb + sy, planeAt, 0.52 * dExp);
+        if (k === 0 && f < 0) coreOutside = true;
         if (f > fOn) { fOn = f; bsx = sx; bsy = sy; }
-        const c = bseg - mean(ev.g, x0 + sx, ya + sy, x1 + sx, yb + sy);
+        // the median, not the mean, so a thin rule or label stroke crossing the window does not count as a lit segment
+        const c = planeAt((x0 + x1) / 2 + sx, (ya + yb) / 2 + sy) - winPercentile(ev.gd, ev.gc, ev.w, ev.h, x0 + sx, ya + sy, x1 + sx, yb + sy, 0.5);
         if (k === 0) cOn = c;
         if (c > cMax) cMax = c;
       }
-      const fOff = darkShare(ev.gd, ev.w, ev.h, x0 - ex, ya - ey, x1 + ex, yb + ey, thrPix);
+      const fOff = darkShareP(ev, x0 - ex, ya - ey, x1 + ex, yb + ey, planeAt, 0.52 * dExp);
+      // the straightened plane is padded at its sides: a window that touches the padding is outside the picture
+      const wa = rectArea(x0 - ex, ya - ey, x1 + ex, yb + ey);
+      const outside = rectSum(ev.cover, ev.w, ev.h, x0 - ex, ya - ey, x1 + ex, yb + ey) < 0.5 * wa
+        || rectSum(ev.cover, ev.w, ev.h, x0, ya, x1, yb) < 0.9 * area || coreOutside;
       // The global ink map's opinion (kept for the overlay and the registration)
-      const fMap = rectSum(I, w, h, x0, ya, x1, yb) / area;
+      let fMapOn = 0;
+      for (const k of [-1, 0, 1]) { const sx = bar ? 0 : k * dx, sy = bar ? k * dy : 0; fMapOn = Math.max(fMapOn, rectSum(I, w, h, x0 + sx, ya + sy, x1 + sx, yb + sy) / area); }
+      const fMapOff = rectSum(I, w, h, x0 - ex, ya - ey, x1 + ex, yb + ey) / wa0;
+      const fMap = fMapOn;
       const visWin = 1, visCore = 1;
+      // brighter background close to the segment than the fitted plane says: a narrow glare band the plane cannot follow, which could
+      // be washing out a lit segment here
+      const mg = 0.1 * H;
+      const localBg = winPercentile(ev.gd, ev.gc, ev.w, ev.h, x0 - mg, ya - mg, x1 + mg, yb + mg, 0.9);
+      const veilNear = localBg - bseg > 0.25 * dExp + 3 * ev.sigma;
       const seen = dExp >= ev.minDelta; // the contrast a lit segment would show here clears the noise
-      const litByGrey = seen && cMax >= ON_CONTRAST * dExp, unlitByGrey = seen && cOn <= OFF_CONTRAST * dExp;
+      // where the picture is unveiled a lit segment must show nearly its full contrast (a segment half way through changing does not);
+      // under a veil the prediction is rougher, so the demand is lower there
+      const onThr = dExp < 0.85 * ev.dRef ? ON_CONTRAST_VEILED : ON_CONTRAST;
+      const litByGrey = seen && cMax >= onThr * dExp + 1.5 * ev.sigma, unlitByGrey = seen && !veilNear && cOn <= OFF_CONTRAST * dExp + 0.8 * ev.sigma && cOn >= -(0.3 * dExp + 1.5 * ev.sigma); // brighter than the fitted background: a glare spot the fit missed
       let state = '?';
-      if (fOn >= ON_T && litByGrey) state = 'on';
-      else if (fOff <= OFF_T && unlitByGrey) state = 'off';
-      const hidden = state === '?' && !seen;
+      if (!outside && !planeBad && fOn >= ON_T && fMap >= MAP_ON && litByGrey) state = 'on';
+      else if (!outside && !planeBad && fOff <= OFF_T && fMapOff <= MAP_OFF && unlitByGrey) state = 'off';
+      const hidden = state === '?' && !seen && !outside && !planeBad;
       let dn = 0;
       if (state === 'on') { // darkness relative to the contrast this spot should show if lit
-        dn = dExp > 0 ? Math.min(1.5, cMax / dExp) : 0;
+        dn = cMax / Math.max(8, 255 - bseg); // contrast per unit of headroom: constant under a glare veil
       }
-      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, hidden, dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
+      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, hidden, outside, dbg: [bseg, dExp, cMax, ev.bRef, ev.dRef], why: (fOn >= ON_T ? 'F' : '-') + (fOff <= OFF_T ? 'f' : '-') + (litByGrey ? 'G' : '-') + (unlitByGrey ? 'g' : '-') + (seen ? 's' : '-'), dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
     }
     cells.push({ index: i, x0: xr + BODY_L * P, x1: xr, y0: g.y0, y1: g.y0 + H, segs });
   }
@@ -525,6 +643,9 @@ export function readDisplay(img, opts = {}) {
     if (!res || r.status !== 'none') res = r;
     if (r.status !== 'none') break;
     if (r.debug.reason === 'low contrast') break;
+    // the finer pass is for loosely drawn boxes: only when the digits were not found, or found small relative to the crop
+    const g = r.debug.geometry;
+    if (g && g.H >= 0.55 * r.debug.h && /glare|fade|contrast/.test(r.debug.reason || '')) break; // a finer look cannot fix glare, a fade or low contrast
   }
   res.debug.ms = typeof performance !== 'undefined' ? performance.now() - t0 : 0;
   return res;
@@ -547,8 +668,13 @@ function readAt(img, o) {
   if (!res || res.status === 'none') {
     const f = findGeometry(planes, pre.h, o);
     picked = f.picked;
-    if (f.best) { best = f.best; res = decodeAt(planes, best, base, pre, hint && hint.ink); }
-    else res = none('no digit found', base);
+    if (f.best) {
+      for (const alt of f.alts) { // the first alternative that reads cleanly wins; if none does, report the best one's reason
+        const r = decodeAt(planes, alt, base, pre, hint && hint.ink);
+        if (!res) { res = r; best = alt; }
+        if (r.status !== 'none') { res = r; best = alt; break; }
+      }
+    } else res = none('no digit found', base);
     usedHint = false;
   }
   res.debug.usedHint = usedHint;
@@ -564,32 +690,52 @@ function decodeAt(planes, best, base, pre, ref) {
   // The evidence planes (visibility, darkness, expected ink contrast) in the same straightened frame as the ink map.
   const mk = arr => { const sh = shear(arr, pre.w, pre.h, pl.t); return { I: integral(sh.data, sh.w, sh.h), w: sh.w, h: sh.h }; };
   const gsh = shear(pre.gray, pre.w, pre.h, pl.t);
-  const ev = { gd: gsh.data, vis: mk(pre.vis).I, d: mk(pre.d).I, delta: mk(pre.delta).I, g: mk(pre.gray).I, w: pl.w, h: pl.h, dRef: pre.dRef, bRef: pre.bRef, minDelta: 3.5 * pre.sigma };
+  const cov1 = shear(new Float32Array(pre.w * pre.h).fill(1), pre.w, pre.h, pl.t);
+  const cover = { I: integral(cov1.data, cov1.w, cov1.h) }; // 1 where the straightened plane holds real picture, 0 in its padding
+  const ev = { cover: cover.I, gc: cov1.data, gd: gsh.data, vis: mk(pre.vis).I, d: mk(pre.d).I, delta: mk(pre.delta).I, g: mk(pre.gray).I, w: pl.w, h: pl.h, dRef: pre.dRef, bRef: pre.bRef, minDelta: 3.5 * pre.sigma, sigma: pre.sigma };
   const cells = classify(pl, best, ev);
   const debug = Object.assign({}, base, {
     geometry: best, slantDeg: pl.deg, U: info.U, zInk: info.zInk, bodyInk: info.bodyInk,
     overlay: { w: pl.w, h: pl.h, slantDeg: pl.deg, cells, ink: inkBytes(pl.data) },
   });
   const masks = [0, 0, 0];
-  let minMargin = 1, doubt = null, hiddenSeg = null;
+  let minMargin = 1, doubt = null, hiddenSeg = null, cutSeg = null;
   cells.forEach((c, i) => c.segs.forEach((sg, s) => {
     if (sg.state === 'on') { masks[i] |= 1 << s; minMargin = Math.min(minMargin, (sg.fOn - ON_T) / (1 - ON_T)); }
     else if (sg.state === 'off') minMargin = Math.min(minMargin, (OFF_T - sg.fOff) / OFF_T);
     else {
       if (sg.hidden) hiddenSeg = hiddenSeg || { cell: i, seg: sg.name, visWin: sg.visWin };
+      if (sg.outside) cutSeg = cutSeg || { cell: i, seg: sg.name };
       if (!doubt) doubt = { cell: i, seg: sg.name, fOn: sg.fOn, fOff: sg.fOff };
     }
   }));
   debug.masks = masks;
   debug.fills = cells.flatMap(c => c.segs.map(sg => sg.fOn));
-  if (hiddenSeg) return none('segment washed out by glare', Object.assign(debug, hiddenSeg));
-  if (doubt) return none('ambiguous segment', Object.assign(debug, doubt));
-  const lit = cells.flatMap(c => c.segs.filter(sg => sg.state === 'on').map(sg => sg.dark)).sort((a, b) => a - b);
-  const level = lit.length ? lit[Math.floor(lit.length / 2)] : 0;
-  debug.inkLevel = level;
-  if (lit.length && lit[0] < FADE_T * level) {
-    return none('segments mid-fade', Object.assign(debug, { minDark: lit[0] }));
+  // Three dashes: the middle bar of all three cells lit and every other segment that can be seen unlit. (When the digit height is not
+  // pinned by other ink the lattice may stand taller than the crop; windows outside the crop cannot be seen and are ignored here,
+  // which is safe because no number lights only the middle bar in all three cells.)
+  if (cells.every(c => c.segs[6].state === 'on' && c.segs.every((sg, k) => k === 6 || sg.state === 'off' || (sg.state === '?' && (sg.outside || (sg.fMap <= 0.2 && sg.fOn <= 0.5)))))) {
+    return { status: 'dashes', value: null, digits: '---', confidence: minMargin, debug };
   }
+  if (hiddenSeg) return none('segment washed out by glare', Object.assign(debug, hiddenSeg));
+  if (cutSeg) return none('digit cut off at the edge of the crop', Object.assign(debug, cutSeg));
+  if (doubt) return none('ambiguous segment', Object.assign(debug, doubt));
+  // The lit segments of a digit must look alike: a segment still fading in or out is lighter than its neighbours. (Compared within
+  // one digit, because lighting may differ across the display, and relative to each other, so a change of exposure between frames does
+  // not matter.)
+  let level = 0;
+  const medians = [];
+  for (const c of cells) {
+    const lit = c.segs.filter(sg => sg.state === 'on').map(sg => sg.dark).sort((x, y) => x - y);
+    if (!lit.length) continue;
+    const med = lit[Math.floor(lit.length / 2)];
+    level = Math.max(level, med);
+    medians.push(med);
+    if (lit.length >= 2 && lit[0] < FADE_T * med) return none('segments mid-fade', Object.assign(debug, { minDark: lit[0], digitMedian: med, cell: c.index }));
+  }
+  // and the digits must look alike each other: a digit that is half way through changing is lighter than the ones that are not
+  if (medians.length > 1 && Math.min(...medians) < CELL_FADE_T * Math.max(...medians)) return none('segments mid-fade', Object.assign(debug, { digitMedians: medians }));
+  debug.inkLevel = level;
   // A 7 whose top bar runs off the right edge of the crop looks like a 1. If the ones digit reads as 1 and thick ink runs from inside
   // that digit to the last column of the crop, the digit may continue beyond the crop, so the frame is doubtful. Ink at the edge
   // that starts beyond the digit (the bezel, other labels) is not a cut digit.

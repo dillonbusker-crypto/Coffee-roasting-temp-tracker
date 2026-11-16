@@ -16,6 +16,8 @@ import { createCameraSource } from '../sources/camera-source.js';
 import { createCropBox } from './crop-box.js';
 import { expandBoxForDigits, clampBox } from '../reader/camera.js';
 import { formatTemp } from '../core/units.js';
+import { makeFile, downloadFile } from './files.js';
+import { slug } from '../sources/camera-reasons.js';
 
 const BOX_KEY = 'rt.camera.box';
 const GRANTED_KEY = 'rt.camera.granted';
@@ -131,6 +133,13 @@ const DELIVERY = {
   stopped: 'stopped',
 };
 const yn = (v) => (v ? 'yes' : 'no');
+const secs = (v) => (v == null ? 'n/a' : `${(v / 1000).toFixed(1)} s`);
+const capLine = (c) => (c ? `${c.label ? c.label : `digits ${c.digits}`} (${c.w} by ${c.h}, ${secs(c.agoMs)} ago)` : 'none yet');
+function tallyLine(d) {
+  const parts = [`${d.tallyRead ?? 0} read`];
+  for (const [label, n] of Object.entries(d.tally || {})) parts.push(`${n} ${label}`);
+  return `Last ${Math.round((d.tallySeconds ?? 0))} of 60 seconds: ${parts.join(', ')}`;
+}
 const ms = (v) => (v == null ? 'n/a' : `${Math.round(v)} ms`);
 
 export function describeDetails(d = {}, ua = '') {
@@ -145,12 +154,25 @@ export function describeDetails(d = {}, ua = '') {
     `Digit reader, last ${d.readerSeconds || 5} seconds: ${d.readerOk ?? 0} read, ${d.readerDashes ?? 0} dashes, ${d.readerNone ?? 0} unreadable`,
     `Reader time per picture, last ${d.readerSeconds || 5} seconds: ${ms(d.readMsAvg)} on average, ${ms(d.readMsMax)} at worst (readable pictures ${ms(d.readMsAvgReadable)}, unreadable ${ms(d.readMsAvgUnreadable)})`,
     `Reader runs ${d.readsPerSecond ?? 0} times a second. Magnifier updates ${d.magnifierPerSecond ?? 0} times a second. Pictures skipped: ${d.skipped5s ?? 0} in the last ${d.readerSeconds || 5} seconds, ${d.framesDropped ?? 0} in all.`,
+    tallyLine(d),
+    `Last 10 seconds, oldest first: ${d.lastOutcomes && d.lastOutcomes.length ? d.lastOutcomes.join(', ') : 'n/a'}`,
+    `Last picture the reader could read: ${d.lastOkValue != null ? `${d.lastOkValue} (digits ${d.lastOkDigits}), ${secs(d.lastOkAgoMs)} ago` : 'none yet'}`,
+    `Picture the reader gets: ${d.cropW ? `${d.cropW} by ${d.cropH} pixels` : 'n/a'}. Digit height as measured: ${d.digitH ? `${d.digitH} pixels, ${Math.round((d.digitH / d.cropH) * 100)}% of the picture height` : 'n/a'}`,
+    `Kept for sharing: readable ${capLine(d.capturedOk)}; unreadable ${capLine(d.capturedMiss)}`,
     `Judged stalled now: ${yn(d.stalledNow)} (${d.stalls ?? 0} stalls so far)`,
     `Exposure lock: ${d.exposureLock || 'n/a'}. Focus lock: ${d.focusLock || 'n/a'}.`,
     `Device: ${deviceLabel(ua)}`,
     `Browser string: ${ua}`,
   ];
   return lines.join('\n');
+}
+
+// The picture exactly as the reader got it, as a PNG.
+function pngBlob(imageData) {
+  const c = document.createElement('canvas');
+  c.width = imageData.width; c.height = imageData.height;
+  c.getContext('2d').putImageData(imageData, 0, 0);
+  return new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not make the picture'))), 'image/png'));
 }
 
 function selectText(el) {
@@ -186,6 +208,9 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
   const cropCtx = crop.getContext('2d');
   const value = h('div', { class: 'cam-value', id: 'cam-value' }, '—');
   const status = h('div', { class: 'cam-status', id: 'cam-status', role: 'status', 'aria-live': 'polite' }, '');
+  const whyText = h('span', { class: 'cam-why-text', id: 'cam-why-text' }, '');
+  const whyHint = h('span', { class: 'cam-why-hint', id: 'cam-why-hint' }, '');
+  const why = h('p', { class: 'cam-why', id: 'cam-why', hidden: true }, whyText, ' ', whyHint);
   const readRow = h('div', { class: 'cam-read' },
     h('div', { class: 'cam-mag' }, h('span', { class: 'cam-cap' }, 'What the reader sees'), crop),
     h('div', { class: 'cam-val' }, h('span', { class: 'cam-cap' }, 'Reads'), value));
@@ -195,7 +220,7 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
     h('p', { class: 'cam-legend' },
       h('span', { class: 'cam-key cam-key-box' }), 'Reading box ',
       h('span', { class: 'cam-key cam-key-ext' }), 'Also searched, for a third digit'),
-    readRow, status);
+    readRow, status, why);
 
   const tips = h('div', { class: 'cam-tips', id: 'cam-tips' },
     h('h3', null, 'Aiming tips'),
@@ -220,11 +245,33 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
     setText(copyNote, ok ? 'Copied to the clipboard.' : 'Could not copy. The text is selected: touch it and choose Copy.');
     copyNote.dataset.kind = ok ? 'ok' : 'warn';
   }
+  async function sharePictures() {
+    const cap = source ? source.captured() : { ok: null, miss: null };
+    if (!cap.miss) { setText(copyNote, cap.ok ? 'No unreadable picture has been seen yet.' : 'No pictures captured yet.'); copyNote.dataset.kind = 'warn'; return; }
+    setText(copyNote, 'Preparing the pictures…'); copyNote.dataset.kind = '';
+    const entries = [[`reader-miss-${slug(cap.miss.reason)}.png`, cap.miss]];
+    if (cap.ok) entries.push([`reader-ok-${String(cap.ok.digits || cap.ok.value).padStart(3, '0')}.png`, cap.ok]);
+    const files = [];
+    for (const [name, c] of entries) files.push(makeFile(name, await pngBlob(c.imageData), 'image/png'));
+    try {
+      if (navigator.share && navigator.canShare && navigator.canShare({ files })) {
+        await navigator.share({ files, title: 'Reader pictures' });
+        setText(copyNote, 'Shared.'); copyNote.dataset.kind = 'ok';
+        return;
+      }
+    } catch (err) {
+      if (err && err.name === 'AbortError') { setText(copyNote, 'Cancelled.'); copyNote.dataset.kind = ''; return; }
+      // anything else: download instead
+    }
+    files.forEach((f, i) => setTimeout(() => downloadFile(f.name, f, 'image/png'), i * 400));
+    setText(copyNote, `Saved ${files.length} pictures: ${files.map((f) => f.name).join(', ')}.`); copyNote.dataset.kind = 'ok';
+  }
   const details = h('details', { class: 'cam-details', id: 'cam-details' },
     h('summary', null, 'Camera details'),
     h('p', { class: 'muted small' }, 'Facts about the camera, in plain words. If the camera misbehaves, copy these and send them on.'),
     detailsText,
     h('button', { type: 'button', class: 'btn cam-copy', id: 'cam-copy', onClick: copyDetails }, 'Copy details'),
+    h('button', { type: 'button', class: 'btn cam-copy', id: 'cam-share', onClick: sharePictures }, 'Share the last unreadable picture'),
     copyNote);
   details.addEventListener('toggle', () => {
     clearInterval(copyTimer); copyTimer = null;
@@ -301,6 +348,7 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
   function renderRead() {
     if (!source || source.state !== 'live') {
       const t = source && TROUBLE_TEXT[source.state];
+      why.hidden = true;
       setText(value, '—');
       setText(status, t || '');
       status.dataset.kind = 'wait';
@@ -311,6 +359,17 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
     setText(status, d.text);
     status.dataset.kind = d.kind;
     value.dataset.kind = d.kind;
+    renderWhy();
+  }
+
+  // Why it cannot read, in plain words: the most common reason over the last 2 seconds, so it does not flicker.
+  function renderWhy() {
+    const w = source && source.state === 'live' ? source.explain() : null;
+    why.hidden = !w;
+    if (!w) return;
+    setText(whyText, w.text);
+    setText(whyHint, w.hint || '');
+    why.dataset.kind = w.kind;
   }
 
   function onFrame(f) {

@@ -47,7 +47,7 @@ function world(opts = {}) {
     settings: { reader: { fps: 4, minF: 50, maxF: 550, maxJumpF: 15 } },
     video: cam.video,
     createCamera: () => cam,
-    readDisplay: (img) => ({ ...img, debug: {} }),
+    readDisplay: (img) => ({ ...img, debug: img.debug || {} }),
     createFilter: opts.createFilter || createReadingFilter,
     now: () => ms,
     secureContext: () => opts.secure !== false,
@@ -490,4 +490,105 @@ test('diagnostics() separates the cost of readable and unreadable pictures and c
   assert.equal(Math.round(d.readMsAvgUnreadable), 40);
   assert.equal(d.readMsMax, 40);
   assert.ok(d.magnifierPerSecond > 0.5 && d.readsPerSecond > 0.5);
+});
+
+// ---- why a second was not read ----
+
+const miss = (reason, extra = {}) => ({ status: 'none', value: null, width: 100, height: 40, debug: { reason, ...extra } });
+
+test('a second with no reading is tallied under its most common reason, and the roast tally goes into health().missReasons', async () => {
+  const w = world();
+  await w.source.start();
+  await w.source.start();                                   // the roast starts
+  for (const [reason, n] of [['ambiguous segment', 3], ['segments mid-fade', 2], ['low contrast', 1]]) {
+    for (let i = 0; i < n; i++) { w.advance(250); w.cam.frame(miss(reason)); }
+  }
+  assert.equal(w.source.sample(0), null);                   // 5 unclear digit frames beat 1 faint
+  w.feed(0, 1, 'dashes');
+  assert.equal(w.source.sample(1), null);
+  w.advance(1500);                                          // no pictures at all
+  assert.equal(w.source.sample(2), null);
+  w.advance(250); w.cam.frame(miss('digit cut off at the right edge of the crop'));
+  w.source.sample(3);
+  w.feed(80, 1);
+  assert.equal(w.source.sample(4), 80);
+  assert.deepEqual(w.source.health().missReasons, { 'unclear digit': 1, 'no probe': 1, 'no picture': 1, 'digit cut off': 1 });
+  const d = w.source.diagnostics();
+  assert.equal(d.tallyRead, 1);
+  assert.equal(d.tally['unclear digit'], 1);
+  assert.deepEqual(d.lastOutcomes, ['unclear digit', 'dashes', 'no picture', 'digit cut off', '80']);
+  // a fresh roast starts the tally again
+  await w.source.start();
+  assert.deepEqual(w.source.health().missReasons, {});
+});
+
+test('filter rejections are named with both values: out of range, jump too big, frames disagreed', async () => {
+  const w = world();
+  await w.source.start();
+  await w.source.start();
+  w.feed(100, 1); assert.equal(w.source.sample(0), 100);
+  w.feed(300, 1); assert.equal(w.source.sample(1), null);
+  w.advance(1000); for (const v of [20, 20, 20, 20]) { w.advance(250); w.cam.frame({ status: 'ok', value: v, debug: {} }); }
+  assert.equal(w.source.sample(2), null);
+  w.advance(1000); for (const v of [100, 130, 100, 130]) { w.advance(250); w.cam.frame({ status: 'ok', value: v, debug: {} }); }
+  assert.equal(w.source.sample(3), null);
+  const d = w.source.diagnostics();
+  assert.deepEqual(d.lastOutcomes, ['100', 'jump too big (100 to 300)', 'out of range (20)', 'frames disagreed']);
+  assert.deepEqual(w.source.health().missReasons, { 'jump too big': 1, 'out of range': 1, 'frames disagreed': 1 });
+});
+
+test('before the roast the diagnostics tick closes a shadow second without touching the roast filter', async () => {
+  const w = world();
+  await w.source.start();
+  w.feed(90, 1); w.source.diagTick();
+  w.feed(0, 1, 'none'); w.source.diagTick();
+  assert.deepEqual(w.source.diagnostics().lastOutcomes, ['90', 'unreadable']);
+  const h = w.source.health();
+  assert.deepEqual([h.secondsRead, h.rejected, h.secondsMissing], [0, 0, 0]);
+  assert.deepEqual(h.missReasons, {});
+});
+
+test('explain(): the most common reason over 2 s, only when it cannot read, with out-of-range and jump notes', async () => {
+  const w = world();
+  await w.source.start();
+  assert.equal(w.source.explain().label, 'no picture');
+  for (const r of ['digit cut off at the right edge of the crop', 'ambiguous segment', 'digit cut off at the right edge of the crop', 'digit cut off at the right edge of the crop']) { w.advance(250); w.cam.frame(miss(r)); }
+  const e = w.source.explain();
+  assert.equal(e.label, 'digit cut off');
+  assert.equal(e.text, 'A digit is cut off at the right edge.');
+  assert.equal(e.hint, 'Move the box right.');
+  w.feed(77, 1);
+  assert.equal(w.source.explain(), null, 'readable again: nothing to explain');
+  w.advance(3000); w.feed(23, 1);
+  assert.match(w.source.explain().text, /23°F is outside the accepted range of 50 to 550/);
+  w.advance(3000); w.feed(0, 1, 'dashes');
+  assert.equal(w.source.explain(), null, 'dashes have their own status line');
+  // frames that read but disagree
+  w.advance(3000);
+  for (const v of [60, 90, 120, 150]) { w.advance(250); w.cam.frame({ status: 'ok', value: v, debug: {} }); }
+  assert.equal(w.source.explain().kind, 'disagree');
+});
+
+test('the newest readable and unreadable pictures are kept exactly as the reader got them', async () => {
+  const w = world();
+  await w.source.start();
+  const ok1 = { status: 'ok', value: 77, digits: '77', width: 100, height: 40, debug: { scale: 2, geometry: { H: 60 } } };
+  const miss1 = miss('ambiguous segment', { digits: '7?' });
+  const ok2 = { status: 'ok', value: 80, digits: '80', width: 120, height: 48, debug: { scale: 2, geometry: { H: 80 } } };
+  w.advance(250); w.cam.frame(ok1);
+  w.advance(250); w.cam.frame(miss1);
+  let c = w.source.captured();
+  assert.equal(c.ok.imageData, ok1);
+  assert.equal(c.miss.imageData, miss1, 'the same object the reader read');
+  assert.equal(c.miss.reason, 'ambiguous segment');
+  assert.equal(c.miss.label, 'unclear digit');
+  w.advance(250); w.cam.frame(ok2);
+  c = w.source.captured();
+  assert.equal(c.ok.imageData, ok2, 'the newest readable one');
+  assert.equal(c.miss.imageData, miss1, 'the unreadable one stays until a newer miss');
+  const d = w.source.diagnostics();
+  assert.deepEqual([d.cropW, d.cropH, d.digitH], [120, 48, 40]);
+  assert.equal(d.lastOkValue, 80);
+  assert.equal(d.capturedMiss.reason, 'ambiguous segment');
+  assert.equal(d.capturedOk.w, 120);
 });

@@ -185,3 +185,19 @@ test('a 60 s climb at 4 fps through 99 to 100 with transition frames yields one 
   assert.ok(out.every(([truth, v]) => v === truth));
   assert.equal(f.health().secondsRead, 60);
 });
+
+test('lastOutcome() says why the last second ended as it did', () => {
+  const f = createReadingFilter();
+  const second = (vals, status = 'ok') => { for (const v of vals) f.addFrame({ status, value: v }); return f.closeSecond(); };
+  assert.equal(f.lastOutcome().kind, 'missing');
+  assert.equal(second([100, 100]), 100);
+  assert.deepEqual(f.lastOutcome(), { kind: 'read', value: 100 });
+  assert.equal(second([300, 300]), null);
+  assert.deepEqual(f.lastOutcome(), { kind: 'jump', value: 300, last: 100, allowed: 17 });
+  assert.equal(second([20, 20]), null);
+  assert.deepEqual(f.lastOutcome(), { kind: 'range', value: 20 });
+  assert.equal(second([100, 130, 100, 130]), null);
+  assert.equal(f.lastOutcome().kind, 'disagree');
+  assert.equal(second([], 'dashes'), null);
+  assert.equal(f.lastOutcome().kind, 'missing');
+});

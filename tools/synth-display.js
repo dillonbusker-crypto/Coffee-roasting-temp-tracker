@@ -162,40 +162,104 @@ export function renderDisplay(p) {
   octx.drawImage(scene, 0, 0);
   octx.restore();
 
-  // pixel pass: keystone perspective, lighting gradient, glare, grain and sensor noise
+  // pixel pass 1: keystone perspective and aspect (geometry only)
   const src = octx.getImageData(0, 0, w, h);
   const dst = octx.createImageData(w, h);
   const sd = src.data, dd = dst.data;
-  const k = p.perspective || 0, gr = p.gradient || { amp: 0, angle: 0 }, gl = p.glare;
-  const ca = Math.cos(gr.angle || 0), sa = Math.sin(gr.angle || 0);
-  // brushed grain: row-correlated noise
-  const grainRows = new Float32Array(h);
-  for (let y = 0; y < h; y++) grainRows[y] = gauss(rng);
+  const k = p.perspective || 0;
   for (let y = 0; y < h; y++) {
     const s = (p.aspect || 1) * (1 + k * (y / h - 0.5) * 2); // horizontal scale about the centre
     for (let x = 0; x < w; x++) {
-      let sx = w / 2 + (x - w / 2) / s;
-      let r, g2, b;
-      if (sx < 0 || sx > w - 1) { r = bgR; g2 = bgG; b = bgB; } else {
-        const i0 = Math.floor(sx), f = sx - i0, a = (y * w + i0) * 4, b2 = (y * w + Math.min(w - 1, i0 + 1)) * 4;
-        r = sd[a] * (1 - f) + sd[b2] * f; g2 = sd[a + 1] * (1 - f) + sd[b2 + 1] * f; b = sd[a + 2] * (1 - f) + sd[b2 + 2] * f;
-      }
-      let m = 1 + (gr.amp || 0) * (((x / w - 0.5) * ca + (y / h - 0.5) * sa));
-      r *= m; g2 *= m; b *= m;
-      if (gl) {
-        const d2 = ((x - gl.x) ** 2 + (y - gl.y) ** 2) / (gl.r * gl.r);
-        const a = gl.amp * Math.exp(-d2);
-        r += (255 - r) * a; g2 += (255 - g2) * a; b += (255 - b) * a;
-      }
-      const n = gauss(rng) * (p.noise || 0) + grainRows[y] * (p.grain || 0);
+      const sx = w / 2 + (x - w / 2) / s;
       const o = (y * w + x) * 4;
-      dd[o] = Math.max(0, Math.min(255, r + n));
-      dd[o + 1] = Math.max(0, Math.min(255, g2 + n));
-      dd[o + 2] = Math.max(0, Math.min(255, b + n));
+      if (sx < 0 || sx > w - 1) { dd[o] = bgR; dd[o + 1] = bgG; dd[o + 2] = bgB; } else {
+        const i0 = Math.floor(sx), f = sx - i0, a = (y * w + i0) * 4, b2 = (y * w + Math.min(w - 1, i0 + 1)) * 4;
+        dd[o] = sd[a] * (1 - f) + sd[b2] * f; dd[o + 1] = sd[a + 1] * (1 - f) + sd[b2 + 1] * f; dd[o + 2] = sd[a + 2] * (1 - f) + sd[b2 + 2] * f;
+      }
       dd[o + 3] = 255;
     }
   }
+  // pixel pass 2: lighting, glare, sensor noise, exposure
+  applyPhotometric(dst, p, rng);
   return dst;
+}
+
+/**
+ * The photometric part of what a phone camera does to a picture of the display, applied in place to any ImageData (so the same
+ * distortions can be put on the real photo crops):
+ *   gradient {amp, angle}          brightness ramp across the crop
+ *   vignette                       radial darkening towards the corners (0..1)
+ *   glare | glares [{x, y, rx, ry, angle, amp, pw}]   specular veil: out = in + (255 - in) * a, a = amp * exp(-d^(2*pw)); amp 1 is
+ *                                  pure white, 0.5 leaves half of the contrast; pw > 1 gives a flatter top and a firmer edge
+ *   noise, grain                   sensor noise (per pixel) and row-correlated grain (brushed metal)
+ *   exposure {gain, gamma, cast}   auto-exposure and white-balance state of this frame, applied after the sensor with clipping
+ *   blockNoise                     8x8 block offsets (video compression)
+ * x, y, rx, ry are in pixels of the crop.
+ */
+export function applyPhotometric(img, p, rng) {
+  const w = img.width, h = img.height, d = img.data;
+  const gr = p.gradient || { amp: 0, angle: 0 };
+  const ca = Math.cos(gr.angle || 0), sa = Math.sin(gr.angle || 0);
+  const glares = (p.glares || (p.glare ? [Object.assign({ pw: 1 }, p.glare.rx ? p.glare : { rx: p.glare.r, ry: p.glare.r, angle: 0 })] : [])).map(g => ({
+    x: g.x, y: g.y, ix: Math.cos(g.angle || 0) / g.rx, iy: Math.sin(g.angle || 0) / g.rx, jx: -Math.sin(g.angle || 0) / g.ry, jy: Math.cos(g.angle || 0) / g.ry, amp: g.amp, pw: g.pw || 1,
+  }));
+  const ex = p.exposure, vig = p.vignette || 0;
+  const grainRows = new Float32Array(h);
+  for (let y = 0; y < h; y++) grainRows[y] = gauss(rng);
+  const cx = w / 2, cy = h / 2, rmax2 = cx * cx + cy * cy;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      let r = d[o], g2 = d[o + 1], b = d[o + 2];
+      let m = 1 + (gr.amp || 0) * ((x / w - 0.5) * ca + (y / h - 0.5) * sa);
+      if (vig) m *= 1 - vig * (((x - cx) ** 2 + (y - cy) ** 2) / rmax2);
+      r *= m; g2 *= m; b *= m;
+      let keep = 1;
+      for (const gl of glares) {
+        const dx = x - gl.x, dy = y - gl.y, u = dx * gl.ix + dy * gl.iy, v = dx * gl.jx + dy * gl.jy;
+        keep *= 1 - gl.amp * Math.exp(-Math.pow(u * u + v * v, gl.pw));
+      }
+      if (keep < 1) { const a = 1 - keep; r += (255 - r) * a; g2 += (255 - g2) * a; b += (255 - b) * a; }
+      const n = gauss(rng) * (p.noise || 0) + grainRows[y] * (p.grain || 0);
+      r += n; g2 += n; b += n;
+      if (ex) {
+        const c = ex.cast || [1, 1, 1];
+        r = 255 * Math.pow(Math.max(0, Math.min(1, r * ex.gain * c[0] / 255)), ex.gamma);
+        g2 = 255 * Math.pow(Math.max(0, Math.min(1, g2 * ex.gain * c[1] / 255)), ex.gamma);
+        b = 255 * Math.pow(Math.max(0, Math.min(1, b * ex.gain * c[2] / 255)), ex.gamma);
+      }
+      d[o] = r < 0 ? 0 : r > 255 ? 255 : r; d[o + 1] = g2 < 0 ? 0 : g2 > 255 ? 255 : g2; d[o + 2] = b < 0 ? 0 : b > 255 ? 255 : b; d[o + 3] = 255;
+    }
+  }
+  if (p.blockNoise) { // 8x8 block offsets and a little ringing, as from a hardware video encoder
+    for (let by = 0; by < h; by += 8) for (let bx = 0; bx < w; bx += 8) {
+      const off = gauss(rng) * p.blockNoise;
+      for (let y = by; y < Math.min(h, by + 8); y++) for (let x = bx; x < Math.min(w, bx + 8); x++) {
+        const o = (y * w + x) * 4;
+        d[o] = Math.max(0, Math.min(255, d[o] + off)); d[o + 1] = Math.max(0, Math.min(255, d[o + 1] + off)); d[o + 2] = Math.max(0, Math.min(255, d[o + 2] + off));
+      }
+    }
+  }
+  return img;
+}
+
+/** Render, then pass through a real JPEG round trip (p.jpeg = quality 0..1) the way a camera's video encoder would. Async. */
+export async function renderFrame(p) {
+  const img = renderDisplay(p);
+  if (!p.jpeg) return img;
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.putImageData(img, 0, 0);
+  const im = new Image(); im.src = c.toDataURL('image/jpeg', p.jpeg);
+  await im.decode();
+  ctx.drawImage(im, 0, 0);
+  return ctx.getImageData(0, 0, img.width, img.height);
+}
+
+/** Apply the photometric distortions of `p` to an existing ImageData (a real crop), returning a copy. */
+export function distortCopy(img, p, rng) {
+  const out = new ImageData(new Uint8ClampedArray(img.data), img.width, img.height);
+  return applyPhotometric(out, p, rng);
 }
 
 // ---------- parameter generation ----------
@@ -253,3 +317,56 @@ export function randomParams(rng, text, level = 'mild', opts = {}) {
   };
   return p;
 }
+
+
+// ---------- phone-camera conditions: glare, exposure drift, shadows, vignetting, compression ----------
+
+/** One frame's auto-exposure / white-balance state. jump: draw anew (independent of the last frame). */
+export function randomExposure(rng, prev, spec = {}) {
+  const gl = spec.gain || [0.6, 1.5], gm = spec.gamma || [0.7, 1.4], cs = spec.cast || 0.1;
+  const draw = () => ({ gain: Math.exp(rr(rng, Math.log(gl[0]), Math.log(gl[1]))), gamma: rr(rng, gm[0], gm[1]), cast: [1 + rr(rng, -cs, cs), 1 + rr(rng, -cs / 2, cs / 2), 1 + rr(rng, -cs, cs)] });
+  if (!prev || spec.independent) return draw();
+  const n = draw(); // random walk with the occasional jump, as auto-exposure behaves
+  if (rng() < 0.2) return n;
+  const mix = (a, b, t) => a + (b - a) * t;
+  return { gain: mix(prev.gain, n.gain, 0.25), gamma: mix(prev.gamma, n.gamma, 0.25), cast: prev.cast.map((c, i) => mix(c, n.cast[i], 0.25)) };
+}
+
+/**
+ * Add phone-camera conditions to params from randomParams. spec: { glare: [minAmp, maxAmp] | null, glareCount, exposure: spec | true,
+ * shadow: true, vignette: [min, max], jpeg: [qmin, qmax] }. Draws from rng after randomParams, so the older levels are unchanged.
+ */
+export function addConditions(rng, p, spec) {
+  const w = p.w, h = p.h;
+  if (spec.glare) {
+    const n = spec.glareCount ?? (rng() < 0.4 ? 2 : 1);
+    p.glares = [];
+    for (let i = 0; i < n; i++) {
+      const kind = rng();
+      let rx, ry;
+      if (kind < 0.3) { rx = rr(rng, 0.5, 1.4) * w; ry = rr(rng, 0.5, 1.4) * h; }     // covers a whole digit or more
+      else if (kind < 0.65) { rx = rr(rng, 0.12, 0.35) * w; ry = rr(rng, 0.25, 0.8) * h; } // covers part of a digit
+      else { rx = rr(rng, 0.6, 1.5) * w; ry = rr(rng, 0.06, 0.2) * h; }                // a streak
+      p.glares.push({ x: rng() * w, y: rng() * h, rx, ry, angle: rng() < 0.5 ? rr(rng, -0.6, 0.6) : rr(rng, 0, 3.14), amp: rr(rng, spec.glare[0], spec.glare[1]), pw: rr(rng, 1, 2.2) });
+    }
+    p.glare = null;
+  }
+  if (spec.exposure) p.exposure = randomExposure(rng, null, spec.exposure === true ? {} : spec.exposure);
+  if (spec.shadow) { // segment shadows off the reflective backing: any direction, varied strength and softness
+    const g = p.geometry, ang = rng() * 6.28, dist = rr(rng, 0.015, 0.05);
+    g.ghostDx = Math.cos(ang) * dist; g.ghostDy = Math.sin(ang) * dist; g.ghostAlpha = rr(rng, 0.12, 0.45);
+  }
+  if (spec.vignette) p.vignette = rr(rng, ...spec.vignette);
+  if (spec.gradient) p.gradient = { amp: rr(rng, ...spec.gradient), angle: rng() * 6.28 };
+  if (spec.jpeg) { p.jpeg = rr(rng, ...spec.jpeg); p.blockNoise = rr(rng, 0.5, 2); p.blur = Math.max(p.blur, rr(rng, 0.4, 1.0)); }
+  return p;
+}
+
+/** Named condition sets used by the tests. */
+export const CONDITIONS = {
+  exposure: { exposure: { independent: true } },
+  glare: { glare: [0.25, 0.6] },                 // a person still reads every segment comfortably
+  glareHard: { glare: [0.6, 0.85] },             // contrast mostly gone under the glare
+  glareGone: { glare: [0.92, 1.0], glareCount: 1 },
+  lighting: { shadow: true, vignette: [0.2, 0.5], gradient: [0.2, 0.5], jpeg: [0.5, 0.85], exposure: { independent: true }, glare: [0.15, 0.45], glareCount: 1 },
+};

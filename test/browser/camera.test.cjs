@@ -108,6 +108,10 @@ function fakeCameraInit(opts) {
     x.fillStyle = 'rgb(150,162,152)'; x.fillRect(40, 120, 1200, 500);
     if (text === 'cover') {                      // a finger over the lens
       x.fillStyle = '#0a0a0a'; x.fillRect(0, 0, W, H);
+    } else if (text === 'glare') {               // a flare washing the whole display out
+      x.fillStyle = 'rgb(236,240,236)'; x.fillRect(0, 0, W, H);
+      const g = x.createRadialGradient(640, 330, 20, 640, 330, 600); g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(230,235,230,0.9)');
+      x.fillStyle = g; x.fillRect(0, 0, W, H);
     } else {
       if (!setImg) setImg = R.renderDisplay(params('572', 420, 220, 300, 40, 11));
       x.putImageData(setImg, 60, 230);
@@ -121,7 +125,7 @@ function fakeCameraInit(opts) {
 
   const loading = import('/tools/synth-display.js').then((m) => { R = m; });
   fake.ready = loading.then(async () => {
-    const texts = ['---', 'cover'];
+    const texts = ['---', 'cover', 'glare'];
     for (let v = 70; v <= 230; v++) texts.push(String(v));
     for (const t of texts) { scene(t); await new Promise((r) => setTimeout(r, 0)); }
   });
@@ -132,6 +136,7 @@ function fakeCameraInit(opts) {
     let t;
     if (fake.mode === 'dashes') t = '---';
     else if (fake.mode === 'cover') t = 'cover';
+    else if (fake.mode === 'glare') t = 'glare';
     else t = String(fake.current());
     if (t !== lastText) { fake.log.push({ t: Date.now(), text: t }); lastText = t; }
     ctx.drawImage(scene(t), 0, 0);
@@ -275,6 +280,115 @@ async function iosClocks(browser, base, finish) {
   }
 }
 
+
+// Why it cannot read: two different ways to make the display unreadable, and the pictures kept for sharing.
+async function reasonsTest(browser, base, finish) {
+  console.log('Reasons, tally and the shared pictures');
+  const t = await newPage(browser, base, { granted: true });
+  const { page } = t;
+  const client = await t.context.newCDPSession(page);
+  await page.context().grantPermissions([], { origin: base });
+  await t.go('?nosw');
+  await page.evaluate(() => window.__fake.ready);
+  await page.waitForSelector('#cam-stage video');
+  await dragBoxOnto(page, client);
+  await page.waitForFunction(() => /Reading 77/.test(document.getElementById('cam-status').textContent), null, { timeout: 8000 });
+  assert.equal(await page.locator('#cam-why').isHidden(), true, 'nothing to explain while it reads');
+
+  step('A washed-out display (glare): "too faint" with its hint, and nothing flickers');
+  await page.evaluate(() => { window.__fake.mode = 'glare'; });
+  await page.waitForFunction(() => !document.getElementById('cam-why').hidden, null, { timeout: 8000 });
+  const glare = await page.evaluate(() => ({ text: document.getElementById('cam-why-text').textContent, hint: document.getElementById('cam-why-hint').textContent, status: document.getElementById('cam-status').textContent }));
+  console.log('      glare ->', JSON.stringify(glare), await page.evaluate(() => window.__rt.app.setup.camera.source.captured().miss.reason));
+  assert.match(glare.status, /Can.t read the digits yet/);
+  const seen = new Set();
+  for (let i = 0; i < 12; i++) { seen.add(await text(page, '#cam-why-text')); await sleep(250); }
+  assert.equal(seen.size, 1, `the reason flickered: ${[...seen]}`);
+  assert.match(glare.text + glare.hint, /too faint|unclear|No digits/);
+  const glareReason = await page.evaluate(() => window.__rt.app.setup.camera.source.captured().miss.reason);
+  await shot(page, 'camera-why.png');
+
+  step('The same picture goes into the tally (Camera details) and the last-10-seconds list');
+  await sleep(4000);
+  await page.evaluate(() => { document.getElementById('cam-details').open = true; });
+  await page.waitForFunction(() => /Last \d+ of 60 seconds/.test(document.getElementById('cam-details-text').textContent));
+  const d1 = await text(page, '#cam-details-text');
+  const mapped = await page.evaluate(async (r) => { const m = await import('/js/sources/camera-reasons.js'); return m.explainMiss(r); }, glareReason);
+  assert.match(d1, new RegExp(`Last \\d+ of 60 seconds: .*\\d+ ${mapped.label}`));
+  assert.match(d1, new RegExp(`Last 10 seconds, oldest first: .*${mapped.label}`));
+  assert.match(d1, /Last picture the reader could read: 77 \(digits 77\), [\d.]+ s ago/);
+  assert.match(d1, /Picture the reader gets: \d+ by \d+ pixels\. Digit height as measured: \d+ pixels, \d+% of the picture height/);
+  assert.match(d1, /unreadable \S.* \(\d+ by \d+,/);
+  assert.equal(glare.text, mapped.text);
+  assert.equal(glare.hint, mapped.hint);
+
+  step('A digit clipped by the box edge gives a different reason');
+  await page.evaluate(() => { window.__fake.mode = 'hold'; window.__fake.value = 77; });
+  await page.waitForFunction(() => /Reading 77/.test(document.getElementById('cam-status').textContent), null, { timeout: 8000 });
+  await page.waitForFunction(() => document.getElementById('cam-why').hidden);
+  await page.evaluate(() => document.getElementById('cam-details').scrollIntoView({ block: 'nearest' }));
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const s1 = await stageRect(page);
+  const b1 = await boxRect(page);
+  const clipX = s1.left + (700 / 1280) * s1.width;   // through the ones digit
+  await touchDrag(client, { x: b1.right + 22, y: b1.top + b1.height / 2 }, { x: clipX + 22, y: b1.top + b1.height / 2 });
+  await page.waitForFunction(() => !document.getElementById('cam-why').hidden && !/Reading 77/.test(document.getElementById('cam-status').textContent), null, { timeout: 8000 });
+  await sleep(2500);
+  const clip = await page.evaluate(() => ({ text: document.getElementById('cam-why-text').textContent, hint: document.getElementById('cam-why-hint').textContent, reason: window.__rt.app.setup.camera.source.captured().miss.reason, status: document.getElementById('cam-status').textContent }));
+  console.log('      clipped ->', JSON.stringify(clip));
+  const clipMapped = await page.evaluate(async (r) => (await import('/js/sources/camera-reasons.js')).explainMiss(r), clip.reason);
+  assert.equal(clip.text, clipMapped.text);
+  assert.equal(clip.hint, clipMapped.hint);
+  assert.notEqual(clip.text, glare.text, 'two different reasons for two different problems');
+  await shot(page, 'camera-why-clipped.png');
+  await sleep(3000);
+  const d2 = await text(page, '#cam-details-text');
+  assert.match(d2, new RegExp(`\\d+ ${clipMapped.label}`));
+
+  step('Share the last unreadable picture: two PNGs, exactly the reader\'s pixels, named for the outcome');
+  const snap = await page.evaluate(() => {
+    const src = window.__rt.app.setup.camera.source;
+    const c = src.captured();
+    const frozen = { ok: c.ok, miss: c.miss };
+    src.captured = () => frozen;                       // freeze: the next frame must not replace what we compare against
+    const copy = (i) => ({ w: i.width, h: i.height, data: Array.from(i.data) });
+    return { ok: copy(c.ok.imageData), miss: copy(c.miss.imageData), okDigits: c.ok.digits, missReason: c.miss.reason, diag: src.diagnostics() };
+  });
+  const downloads = [];
+  page.on('download', (dl) => downloads.push(dl));
+  await page.evaluate(() => document.getElementById('cam-share').scrollIntoView({ block: 'center' }));
+  assert.ok((await page.$eval('#cam-share', (e) => e.getBoundingClientRect().height)) >= 63.5);
+  await page.click('#cam-share');
+  await page.waitForFunction(() => /Saved 2 pictures/.test(document.getElementById('cam-copy-note').textContent), null, { timeout: 8000 });
+  for (let i = 0; i < 40 && downloads.length < 2; i++) await sleep(100);
+  assert.equal(downloads.length, 2);
+  const names = downloads.map((d) => d.suggestedFilename()).sort();
+  assert.equal(names[0], `reader-miss-${snap.missReason.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}.png`);
+  assert.equal(names[1], `reader-ok-${String(snap.okDigits).padStart(3, '0')}.png`);
+  for (const dl of downloads) {
+    const file = await dl.path();
+    const b64 = fs.readFileSync(file).toString('base64');
+    const px = await page.evaluate(async (b) => {
+      const bmp = await createImageBitmap(await (await fetch(`data:image/png;base64,${b}`)).blob());
+      const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+      const x = c.getContext('2d'); x.drawImage(bmp, 0, 0);
+      const d = x.getImageData(0, 0, c.width, c.height);
+      return { w: d.width, h: d.height, data: Array.from(d.data) };
+    }, b64);
+    const want = dl.suggestedFilename().startsWith('reader-miss') ? snap.miss : snap.ok;
+    assert.equal(px.w, want.w); assert.equal(px.h, want.h);
+    assert.equal(px.data.length, want.data.length);
+    let diff = 0; for (let i = 0; i < px.data.length; i++) if (px.data[i] !== want.data[i]) diff++;
+    assert.equal(diff, 0, `${dl.suggestedFilename()}: ${diff} bytes differ from what the reader saw`);
+    assert.equal(px.w, snap.diag.cropW === px.w ? snap.diag.cropW : px.w);
+  }
+  assert.ok(snap.diag.cropW > 20 && snap.diag.cropH > 20);
+  step(`PNGs ${names.join(', ')} match the reader's pictures (${snap.miss.w} by ${snap.miss.h} and ${snap.ok.w} by ${snap.ok.h} pixels)`);
+  finish('reasons', t.errors);
+  await t.context.close();
+  return { glareReason, clipReason: clip.reason };
+}
+
 // ---- main ----
 
 async function main() {
@@ -285,6 +399,7 @@ async function main() {
   const summary = {};
 
   try {
+    if (process.env.ONLY === 'reasons') { await reasonsTest(browser, base, finish); assert.deepEqual(errors, []); console.log('reasons passed'); return; }
     if (process.env.ONLY === 'ios') { await iosClocks(browser, base, finish); assert.deepEqual(errors, []); console.log('ios variants passed'); return; }
     // ============================================================ permission denied, no camera, insecure
     console.log('Permission and camera-trouble states');
@@ -612,6 +727,11 @@ async function main() {
     assert.ok(Math.abs(counted - total) <= 3, `health counts ${counted} seconds for ${total} readings: ${JSON.stringify(h)}`);
     assert.ok(h.secondsRead >= 40 && h.secondsMissing >= 8 && h.rejected <= 3, `reader health ${JSON.stringify(h)}`);
     summary.health = h;
+    assert.ok(h.missReasons && h.missReasons['no probe'] >= 3 && h.missReasons['no picture'] >= 2, `miss reasons ${JSON.stringify(h.missReasons)}`);
+    const missed = await text(page, '#sum-missed');
+    assert.match(missed, /^Missed: \d+ /);
+    assert.match(missed, /no probe/);
+    summary.missed = missed;
     summary.total = total;
 
     // The chart stayed smooth: no long tasks above 150 ms on the page's main thread during the roast
@@ -676,6 +796,7 @@ async function main() {
     }
 
     await iosClocks(browser, base, finish);
+    summary.reasons = await reasonsTest(browser, base, finish);
 
     // ============================================================ no wake lock
     console.log('Wake lock unsupported');

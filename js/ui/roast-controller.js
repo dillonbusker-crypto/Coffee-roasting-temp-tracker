@@ -60,6 +60,16 @@ export function createRoastController({
 
   const snap = () => session.snapshot();
 
+  // A camera source tallies why seconds were not read; the saved record's reader health carries it as reader.missReasons.
+  function finish(args) {
+    const rec = session.finish(args);
+    try {
+      const m = source.health && source.health().missReasons;
+      if (m && rec.reader && Object.keys(m).length) rec.reader.missReasons = { ...m };
+    } catch { /* the tally is a bonus */ }
+    return rec;
+  }
+
   function draftNow(rec) {
     if (!saveDraft) return;
     try {
@@ -111,7 +121,7 @@ export function createRoastController({
     if (cues.length) handleCues(cues);
     if (now() - lastDraftAt >= draftMs) {
       lastDraftAt = now();
-      draftNow(session.finish({ dropT: s.t }));
+      draftNow(finish({ dropT: s.t }));
     }
     emit();
   }
@@ -199,7 +209,7 @@ export function createRoastController({
 
   function finalize(dropT) {
     stopAll();
-    record = session.finish({ dropT });
+    record = finish({ dropT });
     phase = 'done';
     draftNow(record);
     emit();

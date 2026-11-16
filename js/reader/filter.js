@@ -5,6 +5,7 @@
 //   f.closeSecond();           // -> accepted value (whole degrees F) or null for this second
 //   f.reanchor(value);         // trust `value` as the last accepted reading (manual entry)
 //   f.health();                // counters, see below
+//   f.lastOutcome();           // what the last closeSecond() did, for diagnostics (see below)
 //
 // Rules (docs/SPEC.md, docs/DESIGN.md):
 //  * one value per second: the median of that second's `ok` frames, provided most of them agree;
@@ -28,6 +29,8 @@ export function createReadingFilter(opts = {}) {
   let last = null;           // last accepted value
   let sinceAccepted = 0;     // seconds closed since `last` was accepted (1 = the previous second)
   let streak = [];           // consecutive jump-rejected second values
+  // Why the last second ended as it did: { kind: 'read'|'missing'|'disagree'|'range'|'jump', value?, last?, allowed?, dashes?, values? }
+  let outcome = { kind: 'missing' };
   const h = {
     secondsRead: 0, rejected: 0, rejectedRange: 0, rejectedJump: 0, rejectedDisagree: 0,
     secondsMissing: 0, dashSeconds: 0, reanchors: 0,
@@ -56,6 +59,7 @@ export function createReadingFilter(opts = {}) {
         h.secondsMissing++;
         if (dashes) h.dashSeconds++;
         streak = [];
+        outcome = { kind: 'missing', dashes: dashes > 0 };
         return null;
       }
       okVals.sort((a, b) => a - b);
@@ -63,16 +67,18 @@ export function createReadingFilter(opts = {}) {
       const near = okVals.filter(v => Math.abs(v - m) <= cfg.frameAgreeF);
       if (okVals.length > 1 && near.length * 2 <= okVals.length) { // no clear majority: frames contradict each other
         h.rejected++; h.rejectedDisagree++; streak = [];
+        outcome = { kind: 'disagree', values: okVals.slice() };
         return null;
       }
       const v = median(near);
 
-      if (v < cfg.minF || v > cfg.maxF) { h.rejected++; h.rejectedRange++; streak = []; return null; }
+      if (v < cfg.minF || v > cfg.maxF) { h.rejected++; h.rejectedRange++; streak = []; outcome = { kind: 'range', value: v }; return null; }
 
       if (last !== null) {
         const allowed = cfg.maxJumpF + cfg.jumpPerSecF * sinceAccepted;
         if (Math.abs(v - last) > allowed) {
           h.rejected++; h.rejectedJump++;
+          outcome = { kind: 'jump', value: v, last, allowed };
           streak.push(v);
           if (streak.length > cfg.jumpResetSeconds) streak.shift();
           if (streak.length === cfg.jumpResetSeconds && agrees(streak, cfg)) {
@@ -90,6 +96,8 @@ export function createReadingFilter(opts = {}) {
       last = value; sinceAccepted = 0; streak = [];
     },
 
+    lastOutcome() { return outcome; },
+
     health() {
       return Object.assign({}, h, { lastAccepted: last, secondsSinceAccepted: last === null ? null : sinceAccepted });
     },
@@ -97,6 +105,7 @@ export function createReadingFilter(opts = {}) {
 
   function accept(v) {
     last = v; sinceAccepted = 0; streak = [];
+    outcome = { kind: 'read', value: v };
     h.secondsRead++;
     return v;
   }

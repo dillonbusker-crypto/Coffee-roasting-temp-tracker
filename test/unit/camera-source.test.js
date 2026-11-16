@@ -52,7 +52,7 @@ function world(opts = {}) {
     now: () => ms,
     secureContext: () => opts.secure !== false,
     mediaDevices: () => (opts.noMedia ? undefined : { getUserMedia() {} }),
-    doc: null,
+    doc: opts.doc || null,
     timers: { setInterval: () => 1, clearInterval() {} },
     requireTap: !!opts.requireTap,
   });
@@ -315,8 +315,12 @@ test('while the camera cannot come back, state says so and sample() yields gaps'
   w.feed(121, 1);                                // late frames from a dead stream are not used
   assert.equal(w.source.sample(1), null);
   assert.equal(w.source.health().secondsMissing, 1);
-  // retries are backed off, then succeed once the camera is free again
+  // retries are backed off (3 s), then succeed once the camera is free again
   w.cam.failWith = null;
+  w.advance(1600);
+  w.source.checkNow();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(w.source.state, 'ended', 'too soon for another try');
   w.advance(1600);
   w.source.checkNow();
   await new Promise((r) => setImmediate(r));
@@ -328,15 +332,15 @@ test('a muted track and a stalled video are reported; a stall right after a rest
   await w.source.start();
   w.track.muted = true;
   w.source.checkNow();
+  assert.equal(w.source.state, 'live', 'a new stream is not judged for the first 5 s');
+  w.advance(5100);
+  w.source.checkNow();
   assert.equal(w.source.state, 'muted');
   assert.equal(w.source.peek().status, 'none');
   w.track.muted = false;
   w.source.checkNow();
   assert.equal(w.source.state, 'live');
   w.cam.stats.stalledNow = true;
-  w.source.checkNow();
-  assert.equal(w.source.state, 'live');          // within 2.5 s of opening
-  w.advance(3000);
   w.source.checkNow();
   assert.equal(w.source.state, 'stalled');
   w.cam.stats.stalledNow = false;
@@ -359,4 +363,75 @@ test('health() has the three numbers a roast record stores', async () => {
   const h = w.source.health();
   for (const k of ['secondsRead', 'rejected', 'secondsMissing']) assert.equal(typeof h[k], 'number');
   assert.equal(w.source.kind, 'camera');
+});
+
+test('a stall is reopened only after it has lasted several seconds, and a muted track is not reopened at all while hidden or untouched', async () => {
+  const w = world();
+  await w.source.start();
+  w.advance(6000);
+  w.cam.stats.stalledNow = true;
+  w.source.checkNow();
+  assert.equal(w.source.state, 'stalled');
+  w.advance(5000);
+  w.source.checkNow();
+  assert.equal(w.cam.starts, 1, 'not yet');
+  w.advance(1500);
+  w.source.checkNow();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(w.cam.starts, 2, 'reopened once the stall had lasted 6 s');
+  assert.equal(w.source.diagnostics().reopens, 1);
+  // a muted track waits for unmute: no reopen however long it lasts
+  const m = world();
+  await m.source.start();
+  m.advance(6000);
+  m.track.muted = true;
+  for (let i = 0; i < 40; i++) { m.advance(1000); m.source.checkNow(); }
+  assert.equal(m.source.state, 'muted');
+  assert.equal(m.cam.starts, 1);
+});
+
+test('a muted track is reopened once, 5 s after the page became visible, if it is still muted', async () => {
+  const listeners = [];
+  const doc = { visibilityState: 'visible', addEventListener: (t, f) => listeners.push(f), removeEventListener() {} };
+  const w = world({ doc });
+  await w.source.start();
+  w.advance(6000);
+  w.track.muted = true;
+  w.source.checkNow();
+  w.advance(20000);
+  w.source.checkNow();
+  assert.equal(w.cam.starts, 1);
+  listeners.forEach((f) => f());                  // the page comes back to the foreground
+  w.advance(3000);
+  w.source.checkNow();
+  assert.equal(w.cam.starts, 1);
+  w.advance(2500);
+  w.source.checkNow();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(w.cam.starts, 2);
+});
+
+test('a reopen that does not help backs off instead of looping', async () => {
+  const w = world();
+  await w.source.start();
+  w.advance(6000);
+  for (let i = 0; i < 120; i++) {                 // two minutes: every new stream is dead on arrival
+    w.advance(1000);
+    w.track.readyState = 'ended';
+    w.source.checkNow();
+    await new Promise((r) => setImmediate(r));
+  }
+  assert.ok(w.cam.starts <= 8, `${w.cam.starts} stream openings in 2 minutes`);
+  assert.ok(w.cam.starts >= 4);
+});
+
+test('diagnostics() reports reader frame counts and passes the camera facts through', async () => {
+  const w = world();
+  w.cam.diagnostics = () => ({ delivery: 'rvfc' });
+  await w.source.start();
+  w.feed(77, 1);
+  w.feed(0, 1, 'dashes');
+  const d = w.source.diagnostics();
+  assert.equal(d.delivery, 'rvfc');
+  assert.deepEqual([d.readerOk, d.readerDashes, d.readerNone, d.reopens, d.state], [4, 4, 0, 0, 'live']);
 });

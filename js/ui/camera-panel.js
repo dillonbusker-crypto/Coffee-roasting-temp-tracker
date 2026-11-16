@@ -111,6 +111,55 @@ export function describeRead(p, units) {
   return { kind: 'none', value: '—', text: 'Can’t read the digits yet' };
 }
 
+// ---- Camera details: plain text a person can read out or copy ----
+
+export function deviceLabel(ua = '') {
+  const parts = [];
+  const ios = /(?:iPhone|iPad|iPod).*? OS (\d+)[_.](\d+)/.exec(ua);
+  if (ios) parts.push(`iOS ${ios[1]}.${ios[2]}`);
+  const safari = /Version\/([\d.]+).*Safari/.exec(ua);
+  const chrome = /(?:Chrome|CriOS)\/(\d+)/.exec(ua);
+  if (chrome) parts.push(`Chrome ${chrome[1]}`);
+  else if (safari) parts.push(`Safari ${safari[1]}`);
+  return parts.length ? parts.join(', ') : 'unknown';
+}
+
+const DELIVERY = {
+  rvfc: 'through the video callback',
+  timer: 'on a timer (the video callback is not delivering)',
+  waiting: 'none yet',
+  stopped: 'stopped',
+};
+const yn = (v) => (v ? 'yes' : 'no');
+
+export function describeDetails(d = {}, ua = '') {
+  const lines = [
+    `Camera state: ${d.state || 'not started'}${d.message ? ` (${d.message})` : ''}. Reopened ${d.reopens ?? 0} times.`,
+    `Video: ${d.videoWidth || 0} by ${d.videoHeight || 0}, ready state ${d.readyState ?? '?'}, ${d.paused ? 'paused' : 'playing'}${d.ended ? ', ended' : ''}`,
+    `Camera track: ${d.trackState || 'none'}, ${d.trackMuted ? 'muted' : 'not muted'}`,
+    `Pictures arrive: ${DELIVERY[d.delivery] || d.delivery || 'unknown'}`,
+    `Video callback: ${d.rvfcSupported ? `supported, ${d.rvfcCallbacks ?? 0} calls${d.rvfcDelivering ? ', running now' : ', not running now'}` : 'not supported'}`,
+    `Pictures read per second: ${d.framesPerSecond ?? 0}`,
+    `Video clocks: mediaTime ${d.mediaTime || 'n/a'}, currentTime ${d.currentTime || 'n/a'}, decoded frames ${d.decodedFrames || 'n/a'}`,
+    `Digit reader, last ${d.readerSeconds || 5} seconds: ${d.readerOk ?? 0} read, ${d.readerDashes ?? 0} dashes, ${d.readerNone ?? 0} unreadable`,
+    `Reader time per picture: ${d.readMsAvg ? `${Math.round(d.readMsAvg)} ms` : 'n/a'}, dropped ${d.framesDropped ?? 0}`,
+    `Judged stalled now: ${yn(d.stalledNow)} (${d.stalls ?? 0} stalls so far)`,
+    `Exposure lock: ${d.exposureLock || 'n/a'}. Focus lock: ${d.focusLock || 'n/a'}.`,
+    `Device: ${deviceLabel(ua)}`,
+    `Browser string: ${ua}`,
+  ];
+  return lines.join('\n');
+}
+
+function selectText(el) {
+  try {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    const sel = getSelection();
+    sel.removeAllRanges(); sel.addRange(r);
+  } catch { /* no selection API */ }
+}
+
 // ---- Setup panel ----
 
 export function createCameraPanel({ units = 'F', settings = {} } = {}) {
@@ -153,7 +202,34 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
       h('li', null, 'Keep the SET TEMP number out of the dashed area too: the reader looks there for a third digit.'),
       h('li', null, 'Face the display square-on, and move the phone to avoid glare. The backlight goes off after 10 seconds, and that’s fine.')));
 
-  const root = h('div', { class: 'cam-panel', id: 'cam-panel', 'data-cam': 'idle' }, card, live, tips);
+  // Camera details: collapsed; refreshed once a second while open.
+  const detailsText = h('pre', { class: 'cam-details-text', id: 'cam-details-text' }, '');
+  const copyNote = h('p', { class: 'cam-copy-note', id: 'cam-copy-note', role: 'status', 'aria-live': 'polite' }, '');
+  let copyTimer = null;
+  const ua = () => (typeof navigator !== 'undefined' ? navigator.userAgent : '');
+  const refreshDetails = () => setText(detailsText, describeDetails(source ? source.diagnostics() : { state: 'not started' }, ua()));
+  async function copyDetails() {
+    refreshDetails();
+    const textToCopy = detailsText.textContent;
+    let ok = false;
+    try { await navigator.clipboard.writeText(textToCopy); ok = true; } catch { /* try the older way */ }
+    if (!ok) { try { selectText(detailsText); ok = document.execCommand('copy'); } catch { ok = false; } }
+    if (!ok) selectText(detailsText);
+    setText(copyNote, ok ? 'Copied to the clipboard.' : 'Could not copy. The text is selected: touch it and choose Copy.');
+    copyNote.dataset.kind = ok ? 'ok' : 'warn';
+  }
+  const details = h('details', { class: 'cam-details', id: 'cam-details' },
+    h('summary', null, 'Camera details'),
+    h('p', { class: 'muted small' }, 'Facts about the camera, in plain words. If the camera misbehaves, copy these and send them on.'),
+    detailsText,
+    h('button', { type: 'button', class: 'btn cam-copy', id: 'cam-copy', onClick: copyDetails }, 'Copy details'),
+    copyNote);
+  details.addEventListener('toggle', () => {
+    clearInterval(copyTimer); copyTimer = null;
+    if (details.open) { refreshDetails(); copyTimer = setInterval(refreshDetails, 1000); }
+  });
+
+  const root = h('div', { class: 'cam-panel', id: 'cam-panel', 'data-cam': 'idle' }, card, live, tips, details);
 
   // ---- layout: the picture is as wide as the card allows and no taller than about 40% of the screen ----
 
@@ -260,10 +336,12 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
     el: root,
     video,
     get box() { return box; },
+    get source() { return source; },
     attach,
     layout,
     dispose() {
       detach();
+      clearInterval(copyTimer);
       if (cropBox) cropBox.destroy();
       if (ro) ro.disconnect();
       window.removeEventListener('resize', layout);

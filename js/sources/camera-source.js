@@ -49,10 +49,19 @@ export const STATES = {
 // States in which the camera is delivering good frames.
 const GOOD = new Set(['live']);
 
-const FRAME_KEEP_MS = 2000;     // how long frame results are kept
+const FRAME_KEEP_MS = 5000;     // how long frame results are kept (peek and sample use the last second or so; details show 5 s)
 const SECOND_MS = 1000;         // sample() uses frames from the last second
 const PEEK_MS = 1200;           // peek() looks at the last 1.2 s
 const AGREE_F = 2;              // frames that disagree by more than this are not a value
+
+// Reopening the stream is rare. On iOS a reopen can re-prompt for permission or flash the preview, and a stream that
+// looks dead for a moment is usually just starting.
+const GRACE_MS = 5000;          // a freshly opened stream is not judged (a dead track still counts)
+const STALL_REOPEN_MS = 6000;   // a stall (already 2 s of positive evidence) must last this much longer before a reopen
+const MUTED_REOPEN_MS = 5000;   // a muted track is reopened only if it is still muted this long after the page became visible
+const RETRY_BASE_MS = 3000;     // wait between reopen attempts, doubling up to RETRY_MAX_MS
+const RETRY_MAX_MS = 30000;
+const GOOD_RESET_MS = 20000;    // the wait goes back to the base only after the stream has stayed good this long
 
 export function classifyError(err) {
   const name = (err && err.name) || '';
@@ -95,7 +104,7 @@ export function createCameraSource({
   let hint = null, misses = 0;
   let busy = false;
   let monitor = null;
-  let badSince = null, graceUntil = 0, retryDelay = 1500, nextRetryAt = 0, liveAt = 0;
+  let badSince = null, retryDelay = RETRY_BASE_MS, nextRetryAt = 0, liveAt = 0, goodSince = 0, visRetry = false, reopens = 0;
   let visHandler = null;
   const stateListeners = new Set();
   const frameListeners = new Set();
@@ -172,7 +181,7 @@ export function createCameraSource({
       }
       if (myGen !== gen) { try { cam.stop(); } catch { /* ignore */ } return false; }   // stop() came while we waited
       everLive = true;
-      badSince = null; retryDelay = 1500; nextRetryAt = 0; liveAt = now();
+      badSince = null; liveAt = goodSince = now();
       frames = []; hint = null; misses = 0;
       startLoop();
       startMonitor();
@@ -183,6 +192,7 @@ export function createCameraSource({
   }
 
   async function restart() {
+    reopens++;
     cam.stopLoop();
     try { cam.stop(); } catch { /* ignore */ }
     return open('recover');
@@ -194,7 +204,8 @@ export function createCameraSource({
     if (doc && !visHandler) {
       visHandler = () => {
         if (doc.visibilityState !== 'visible') return;
-        badSince = null; nextRetryAt = 0; retryDelay = 1500;
+        badSince = null; visRetry = true;
+        if (state === 'ended') { nextRetryAt = 0; retryDelay = RETRY_BASE_MS; }   // back from the background: try at once
         const v = cam.video || el;
         if (v && v.paused && state !== 'ended') { try { const p = v.play(); if (p && p.catch) p.catch(() => {}); } catch { /* ignore */ } }
         checkNow();
@@ -217,23 +228,30 @@ export function createCameraSource({
     let track = null;
     try { track = cam.stream && cam.stream.getVideoTracks && cam.stream.getVideoTracks()[0]; } catch { /* ignore */ }
     const stats = cam.stats || {};
+    const t = now();
+    const inGrace = t - liveAt < GRACE_MS;
     let s = 'live';
     if (!track || track.readyState === 'ended' || stats.trackEnded) s = 'ended';
-    else if (track.muted || stats.trackMuted) s = 'muted';
-    else if (stats.stalledNow && now() - liveAt > 2500) s = 'stalled';   // the first frames after a (re)start may be late
-    const t = now();
+    else if (!inGrace) {
+      if (track.muted || stats.trackMuted) s = 'muted';
+      else if (stats.stalledNow) s = 'stalled';     // camera.js only says so on positive evidence
+    }
     if (s === 'live') {
       badSince = null;
-      if (!GOOD.has(state)) { retryDelay = 1500; setState('live'); }
+      if (!GOOD.has(state)) { goodSince = t; setState('live'); }
+      if (t - goodSince >= GOOD_RESET_MS) retryDelay = RETRY_BASE_MS;
       return;
     }
-    if (badSince === null) { badSince = t; graceUntil = t + (s === 'ended' ? 0 : 3000); }
+    if (badSince === null) badSince = t;
     if (state !== s) setState(s, state === s ? message : '');
-    // Try to bring the stream back. A hidden page cannot: wait for it to become visible (visHandler resets the timer).
+    // A hidden page cannot reopen the camera: wait for it to become visible (visHandler restarts the clock).
     if (!pageVisible()) return;
-    if (t >= Math.max(graceUntil, nextRetryAt)) {
+    const age = t - badSince;
+    const due = s === 'ended' ? true : s === 'stalled' ? age >= STALL_REOPEN_MS : visRetry && age >= MUTED_REOPEN_MS;
+    if (due && t >= nextRetryAt) {
       nextRetryAt = t + retryDelay;
-      retryDelay = Math.min(8000, retryDelay * 2);
+      retryDelay = Math.min(RETRY_MAX_MS, retryDelay * 2);
+      visRetry = false;
       restart();
     }
   }
@@ -258,6 +276,19 @@ export function createCameraSource({
     get fps() { return fps; },
     get perf() { return { ...perf }; },
     get box() { return cam.box; },
+    /** Plain facts for the "Camera details" panel: the stream (from camera.js) plus the source's own counters. */
+    diagnostics() {
+      const t = now();
+      const recent = frames.filter((f) => f.at >= t - FRAME_KEEP_MS);
+      const count = (st) => recent.filter((f) => f.res && f.res.status === st).length;
+      const base = cam.diagnostics ? cam.diagnostics() : {};
+      return {
+        ...base, state, message, reopens,
+        readerOk: count('ok'), readerDashes: count('dashes'), readerNone: recent.length - count('ok') - count('dashes'),
+        readerSeconds: FRAME_KEEP_MS / 1000,
+        readMsAvg: perf.msAvg, framesDropped: perf.dropped,
+      };
+    },
     onState(fn) { stateListeners.add(fn); return () => stateListeners.delete(fn); },
     onFrame(fn) { frameListeners.add(fn); return () => frameListeners.delete(fn); },
     checkNow,

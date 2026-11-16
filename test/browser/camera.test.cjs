@@ -71,6 +71,20 @@ function fakeCameraInit(opts) {
     window.AudioContext = function (...a) { window.__audio.contexts++; return new AC(...a); };
   } catch { /* no speech in this build */ }
 
+  // What iOS Safari does to a camera stream, as far as we know: mediaTime stuck at 0 and a fixed currentTime, or no
+  // requestVideoFrameCallback callbacks at all.
+  if (opts.ios) {
+    const proto = HTMLVideoElement.prototype;
+    Object.defineProperty(proto, 'currentTime', { get() { return 0; }, set() {}, configurable: true });
+    if (opts.ios === 'zero') {
+      const orig = proto.requestVideoFrameCallback;
+      proto.requestVideoFrameCallback = function (cb) { return orig.call(this, (now, meta) => cb(now, Object.assign({}, meta, { mediaTime: 0 }))); };
+    } else if (opts.ios === 'silent') {
+      proto.requestVideoFrameCallback = function () { return 1; };
+      proto.cancelVideoFrameCallback = function () {};
+    }
+  }
+
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
@@ -213,6 +227,54 @@ const readStore = (page, store) => page.evaluate((name) => new Promise((resolve,
   };
 }), store);
 
+async function iosClocks(browser, base, finish) {
+  console.log('A stream whose clocks never move (what iOS Safari does), and a requestVideoFrameCallback that never fires');
+  for (const [variant, expectDelivery] of [['zero', 'rvfc'], ['silent', 'timer']]) {
+    const t = await newPage(browser, base, { granted: true, init: { ios: variant } });
+    await t.context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+    const c3 = await t.context.newCDPSession(t.page);
+    await t.go('?nosw');
+    await t.page.evaluate(() => window.__fake.ready);
+    await t.page.waitForSelector('#cam-stage video');
+    await t.page.waitForFunction(() => window.__fake.calls >= 1);
+    await dragBoxOnto(t.page, c3);
+    await t.page.waitForFunction(() => /Reading 77/.test(document.getElementById('cam-status').textContent), null, { timeout: 8000 });
+    step(`${variant}: 12 s on Setup`);
+    await sleep(12000);
+    const d = await t.page.evaluate(() => window.__rt.app.setup.camera.source.diagnostics());
+    assert.equal(d.state, 'live', JSON.stringify(d));
+    assert.equal(d.reopens, 0, 'the stream was never reopened');
+    assert.equal(d.stalls, 0);
+    assert.equal(await t.page.evaluate(() => window.__fake.calls), 1);
+    assert.equal(d.delivery, expectDelivery);
+    assert.ok(d.framesPerSecond >= 3 && d.framesPerSecond <= 4.3, `${d.framesPerSecond} pictures a second`);
+    assert.match(await text(t.page, '#cam-status'), /Reading 77/);
+    assert.equal(await t.page.locator('#start-btn').isDisabled(), false, 'Start is enabled');
+    if (variant === 'zero') {
+      step('Camera details: collapsed, opens, plain text, Copy details copies it');
+      assert.equal(await t.page.$eval('#cam-details', (e) => e.open), false);
+      await t.page.evaluate(() => document.getElementById('cam-details').scrollIntoView({ block: 'end' }));
+      await t.page.click('#cam-details summary');
+      await t.page.waitForFunction(() => /Pictures arrive/.test(document.getElementById('cam-details-text').textContent));
+      const txt = await text(t.page, '#cam-details-text');
+      for (const re of [/Camera state: live\. Reopened 0 times/, /Video: 1280 by 720/, /Camera track: live, not muted/, /through the video callback/, /mediaTime not moving, currentTime not moving/, /Digit reader, last 5 seconds: \d+ read/, /Exposure lock/, /Device: /]) assert.match(txt, re);
+      const btn = await t.page.$eval('#cam-copy', (e) => e.getBoundingClientRect().height);
+      assert.ok(btn >= 63.5, `Copy details is ${btn}px tall`);
+      await t.page.click('#cam-copy');
+      await t.page.waitForFunction(() => /Copied/.test(document.getElementById('cam-copy-note').textContent));
+      assert.match(await t.page.evaluate(() => navigator.clipboard.readText()), /Camera state: live/);
+      await t.page.evaluate(() => document.getElementById('cam-details').scrollIntoView({ block: 'end' }));
+      await shot(t.page, 'camera-details.png');
+      console.log(txt.split('\n').map((l) => `      ${l}`).join('\n'));
+    } else {
+      const txt = await t.page.evaluate(() => { document.getElementById('cam-details').open = true; return null; });
+      await t.page.waitForFunction(() => /on a timer/.test(document.getElementById('cam-details-text').textContent));
+    }
+    finish(`ios ${variant}`, t.errors);
+    await t.context.close();
+  }
+}
+
 // ---- main ----
 
 async function main() {
@@ -223,6 +285,7 @@ async function main() {
   const summary = {};
 
   try {
+    if (process.env.ONLY === 'ios') { await iosClocks(browser, base, finish); assert.deepEqual(errors, []); console.log('ios variants passed'); return; }
     // ============================================================ permission denied, no camera, insecure
     console.log('Permission and camera-trouble states');
     {
@@ -608,6 +671,8 @@ async function main() {
       finish('375', t.errors);
       await t.context.close();
     }
+
+    await iosClocks(browser, base, finish);
 
     // ============================================================ no wake lock
     console.log('Wake lock unsupported');

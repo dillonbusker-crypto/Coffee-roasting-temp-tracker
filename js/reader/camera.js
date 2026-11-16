@@ -7,6 +7,10 @@
 //   const img = cam.grabCrop();             // ImageData of the reader's crop, or null when the video has no frame yet
 //   cam.startLoop((img, info) => { ... });  // calls back at cam.fps (default 4) with each crop
 //   cam.stopLoop(); cam.stop();
+//   cam.diagnostics();                      // plain object: what the stream is doing (for a "Camera details" panel)
+//
+// Is the stream alive? Only positive evidence says it is not (see startLoop). A clock that has never been seen to move
+// (iOS Safari reports mediaTime 0 and a fixed currentTime for camera streams) is not evidence of anything.
 //
 // The reader's crop is the user's box widened to the left by one digit position (see expandBoxForDigits) so a third digit
 // has room when the reading rolls over from 99 to 100, even if the box was drawn tight around two digits.
@@ -51,10 +55,19 @@ export function grabCropFrom(source, sw, sh, box, work = {}) {
 }
 
 /**
- * Calls cb(frameIndex, timeSec) about `fps` times a second while `video` plays, using requestVideoFrameCallback when the
- * browser has it (so each callback sees a new decoded frame) and a drift-corrected timer otherwise. Returns { stop() }.
+ * Calls cb(frameIndex, timeSec, { via }) about `fps` times a second while `video` plays. Returns { stop(), usesRvfc, via, rvfcCount }.
+ *
+ * Recorded video (default): requestVideoFrameCallback when the browser has it, paced by the media clock, else a
+ * drift-corrected timer.
+ *
+ * Live stream (opts.live): hybrid. Each requestVideoFrameCallback is a newly presented frame, whatever mediaTime says, and
+ * delivers a frame when the target period has passed. A timer at the target rate takes over whenever no callback has
+ * arrived for about one period plus a margin (iOS may not run rVFC for a video that is hidden, off-screen or parked), and
+ * stands down again when callbacks resume. Frames are never delivered faster than `fps`, so the two paths cannot double up.
+ * opts.onRvfc(meta) is called for every rVFC callback, delivered or not. opts.env = { now, setTimeout, clearTimeout } is for tests.
  */
 export function createFrameLoop(video, fps, cb, opts = {}) {
+  if (opts.live) return createLiveLoop(video, fps, cb, opts);
   let stopped = false, idx = 0, lastT = -Infinity, timer = null, handle = null;
   const period = 1 / fps;
   const useRvfc = opts.timer !== true && typeof video.requestVideoFrameCallback === 'function';
@@ -62,9 +75,7 @@ export function createFrameLoop(video, fps, cb, opts = {}) {
     const onFrame = (now, meta) => {
       if (stopped) return;
       const t = meta && Number.isFinite(meta.mediaTime) ? meta.mediaTime : video.currentTime;
-      // live streams report mediaTime in an arbitrary clock; use wall time for them
-      const clock = opts.live ? now / 1000 : t;
-      if (clock - lastT >= period - 0.5 / 60) { lastT = clock; cb(idx++, t); }
+      if (t - lastT >= period - 0.5 / 60) { lastT = t; cb(idx++, t); }
       handle = video.requestVideoFrameCallback(onFrame);
     };
     handle = video.requestVideoFrameCallback(onFrame);
@@ -90,8 +101,68 @@ export function createFrameLoop(video, fps, cb, opts = {}) {
   };
 }
 
-export function createCamera({ video, box = { x: 0.55, y: 0.4, w: 0.3, h: 0.15 }, fps = 4, settleMs = 1200, maxCropHeight = MAX_CROP_HEIGHT } = {}) {
+function createLiveLoop(video, fps, cb, opts) {
+  const env = Object.assign({
+    now: () => performance.now(),
+    setTimeout: (f, ms) => setTimeout(f, ms),
+    clearTimeout: (id) => clearTimeout(id),
+  }, opts.env);
+  const periodMs = 1000 / fps;
+  const minGap = periodMs - 5;           // never faster than the target rate (a little slack for frame granularity)
+  const staleMs = periodMs + 120;        // no rVFC callback for this long: the timer delivers frames instead
+  const useRvfc = opts.timer !== true && typeof video.requestVideoFrameCallback === 'function';
+  let stopped = false, idx = 0, timer = null, handle = null;
+  let lastDeliver = -Infinity, lastRvfc = env.now(), rvfcCount = 0, via = 'none';
+
+  const deliver = (kind, t) => {
+    const n = env.now();
+    if (n - lastDeliver < minGap) return;
+    lastDeliver = n; via = kind;
+    cb(idx++, t, { via: kind });
+  };
+
+  if (useRvfc) {
+    const onFrame = (now, meta) => {
+      if (stopped) return;
+      handle = video.requestVideoFrameCallback(onFrame);
+      lastRvfc = env.now(); rvfcCount++;
+      if (opts.onRvfc) opts.onRvfc(meta || {});
+      deliver('rvfc', meta && Number.isFinite(meta.mediaTime) ? meta.mediaTime : video.currentTime);
+    };
+    handle = video.requestVideoFrameCallback(onFrame);
+  }
+
+  let next = env.now() + periodMs;
+  const tick = () => {
+    if (stopped) return;
+    const n = env.now();
+    next += periodMs;
+    if (next < n - 1000) next = n;       // fell far behind (page was hidden): do not burst
+    timer = env.setTimeout(tick, Math.max(0, next - n));
+    if (!useRvfc || n - lastRvfc > staleMs) deliver('timer', video.currentTime);
+  };
+  timer = env.setTimeout(tick, periodMs);
+
+  return {
+    usesRvfc: useRvfc,
+    get via() { return via; },
+    get rvfcCount() { return rvfcCount; },
+    stop() {
+      stopped = true;
+      if (timer !== null) env.clearTimeout(timer);
+      if (handle !== null && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(handle);
+    },
+  };
+}
+
+export function createCamera({ video, box = { x: 0.55, y: 0.4, w: 0.3, h: 0.15 }, fps = 4, settleMs = 1200, maxCropHeight = MAX_CROP_HEIGHT, env: envOpts = {} } = {}) {
+  const env = Object.assign({
+    now: () => performance.now(),
+    setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (id) => clearTimeout(id),
+    setInterval: (f, ms) => setInterval(f, ms), clearInterval: (id) => clearInterval(id),
+  }, envOpts);
   let watchdog = null, stream = null, track = null, userBox = clampBox(box), loop = null, lockTimer = null, work = { maxHeight: maxCropHeight };
+  let sig = null, rvfcAt = -Infinity, rvfcN = 0, grabTimes = [], loopT0 = 0;
   const stats = {
     framesGrabbed: 0, stalls: 0, longestStallMs: 0, stalledNow: false, trackEnded: false, trackMuted: false,
     lastFrameAt: 0, startedAt: 0, lock: { exposure: 'not tried', focus: 'not tried' }, settings: null, capabilities: null,
@@ -101,7 +172,7 @@ export function createCamera({ video, box = { x: 0.55, y: 0.4, w: 0.3, h: 0.15 }
     video,
     get stream() { return stream; },
     get box() { return userBox; },
-    get stats() { return Object.assign({}, stats, { lastFrameAgeMs: stats.lastFrameAt ? performance.now() - stats.lastFrameAt : null }); },
+    get stats() { return Object.assign({}, stats, { lastFrameAgeMs: stats.lastFrameAt ? env.now() - stats.lastFrameAt : null }); },
     lastCrop: null,
     onStall: null, onEnded: null,
 
@@ -115,7 +186,7 @@ export function createCamera({ video, box = { x: 0.55, y: 0.4, w: 0.3, h: 0.15 }
         video: { facingMode: { ideal: facingMode }, width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 30 } },
       });
       track = stream.getVideoTracks()[0];
-      stats.trackEnded = false; stats.trackMuted = false; stats.startedAt = performance.now();
+      stats.trackEnded = false; stats.trackMuted = false; stats.startedAt = env.now();
       track.addEventListener('ended', () => { stats.trackEnded = true; stats.stalledNow = true; api.onEnded && api.onEnded(); });
       track.addEventListener('mute', () => { stats.trackMuted = true; });
       track.addEventListener('unmute', () => { stats.trackMuted = false; });
@@ -123,7 +194,7 @@ export function createCamera({ video, box = { x: 0.55, y: 0.4, w: 0.3, h: 0.15 }
       await video.play();
       if (!video.videoWidth) await new Promise(res => video.addEventListener('loadedmetadata', res, { once: true }));
       try { stats.capabilities = track.getCapabilities ? track.getCapabilities() : null; stats.settings = track.getSettings(); } catch (e) { /* ignore */ }
-      if (lock) lockTimer = setTimeout(() => api.lock(), settleMs);
+      if (lock) lockTimer = env.setTimeout(() => api.lock(), settleMs);
       return { width: video.videoWidth, height: video.videoHeight };
     },
 
@@ -171,32 +242,113 @@ export function createCamera({ video, box = { x: 0.55, y: 0.4, w: 0.3, h: 0.15 }
       return out.imageData;
     },
 
-    /** Call cb(imageData, info) at `fps` with each crop. Also watches for a stalled stream (no new video frame for 2 s). */
-    startLoop(cb, { fps: f = fps } = {}) {
+    /**
+     * Call cb(imageData, info) at `fps` with each crop, and watch the stream. info.stalled is true while the stream is
+     * judged stalled, and such frames should be ignored.
+     *
+     * A stall needs positive evidence; a clock that never moved says nothing. The stream is stalled (stats.stalledNow) when
+     *   * its track has ended, or
+     *   * no requestVideoFrameCallback has arrived for `stallMs` (an rVFC callback is a new frame, whatever mediaTime says)
+     *     AND either a clock signal that has been seen moving on this stream (currentTime, mediaTime, decoded-frame
+     *     counts) has stopped for `stallMs`, or the video has been paused, ended, below readyState 2 or its track muted
+     *     for `stallMs`.
+     * If none of that applies the stream is treated as alive, including when rVFC never fires and no clock ever moved.
+     */
+    startLoop(cb, { fps: f = fps, stallMs = 2000 } = {}) {
       api.stopLoop();
       api.fps = f;
-      let lastTime = NaN, lastChange = performance.now();
-      const markStall = () => {
-        stats.stalledNow = true; stats.stalls++; api.onStall && api.onStall();
+      const t0 = loopT0 = env.now();
+      const mk = () => ({ last: undefined, changed: false, changedAt: t0 });
+      sig = { mediaTime: mk(), currentTime: mk(), decodedFrames: mk() };
+      rvfcAt = -Infinity; rvfcN = 0; grabTimes = [];
+      let badSince = null, stallStart = 0;
+      if (!stats.trackEnded) stats.stalledNow = false;
+
+      const feed = (s, v, n) => {
+        if (typeof v !== 'number' || !Number.isFinite(v)) return;
+        if (s.last !== undefined && v !== s.last) { s.changed = true; s.changedAt = n; }
+        s.last = v;
       };
-      watchdog = setInterval(() => {
-        const age = performance.now() - lastChange;
-        if (age > 2000 && !stats.stalledNow) markStall();
-        if (stats.stalledNow) stats.longestStallMs = Math.max(stats.longestStallMs, age);
-      }, 500);
-      loop = createFrameLoop(video, f, (idx, t) => {
-        const now = performance.now();
-        if (t !== lastTime) { lastTime = t; lastChange = now; stats.lastFrameAt = now; if (stats.stalledNow && !stats.trackEnded) stats.stalledNow = false; }
+      const readClocks = (n) => {
+        feed(sig.currentTime, video.currentTime, n);
+        let decoded;
+        try { const q = video.getVideoPlaybackQuality && video.getVideoPlaybackQuality(); decoded = q ? q.totalVideoFrames : video.webkitDecodedFrameCount; } catch (e) { decoded = undefined; }
+        feed(sig.decodedFrames, decoded, n);
+      };
+      const setStalled = (v, n) => {
+        if (v && !stats.stalledNow) { stats.stalledNow = true; stats.stalls++; stallStart = n; api.onStall && api.onStall(); }
+        else if (!v && stats.stalledNow && !stats.trackEnded) stats.stalledNow = false;
+        if (stats.stalledNow) stats.longestStallMs = Math.max(stats.longestStallMs, n - stallStart);
+      };
+      const evaluate = () => {
+        const n = env.now();
+        readClocks(n);
+        try {
+          if (track && track.readyState === 'ended') stats.trackEnded = true;
+          if (track && typeof track.muted === 'boolean') stats.trackMuted = track.muted;
+        } catch (e) { /* ignore */ }
+        if (stats.trackEnded) { setStalled(true, n); return; }
+        const rvfcAlive = n - rvfcAt <= stallMs;
+        const moving = Object.values(sig).filter(s => s.changed);
+        const clockFrozen = moving.length > 0 && moving.every(s => n - s.changedAt > stallMs);
+        const mediaBad = !!(video.paused || video.ended || video.readyState < 2 || stats.trackMuted);
+        if (mediaBad) { if (badSince === null) badSince = n; } else badSince = null;
+        const mediaBadLong = badSince !== null && n - badSince > stallMs;
+        setStalled(!rvfcAlive && (clockFrozen || mediaBadLong), n);
+      };
+      watchdog = env.setInterval(evaluate, 500);
+      loop = createFrameLoop(video, f, (idx, t, meta) => {
+        const n = env.now();
         const img = api.grabCrop();
-        if (img) cb(img, { index: idx, time: t, crop: api.lastCrop, stalled: stats.stalledNow });
-      }, { live: true });
+        if (img) {
+          stats.lastFrameAt = n;
+          grabTimes.push(n);
+          while (grabTimes.length && grabTimes[0] < n - 5000) grabTimes.shift();
+          cb(img, { index: idx, time: t, via: meta && meta.via, crop: api.lastCrop, stalled: stats.stalledNow });
+        }
+      }, {
+        live: true, env,
+        onRvfc: (meta) => {
+          const n = env.now();
+          rvfcAt = n; rvfcN++;
+          feed(sig.mediaTime, meta.mediaTime, n);
+          if (stats.stalledNow && !stats.trackEnded) setStalled(false, n);   // a new frame arrived
+        },
+      });
       return loop;
     },
-    stopLoop() { if (loop) { loop.stop(); loop = null; } if (watchdog) { clearInterval(watchdog); watchdog = null; } },
+
+    /** Plain facts about the stream for a details panel. Nothing here changes behaviour. */
+    diagnostics() {
+      const n = env.now();
+      const q = (() => { try { return video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null; } catch (e) { return null; } })();
+      const clock = (s) => {
+        if (!s || s.last === undefined) return 'not available';
+        if (!s.changed) return 'not moving';
+        return n - s.changedAt <= 2000 ? 'advancing' : 'frozen';
+      };
+      let trackState = 'none', muted = null;
+      try { if (track) { trackState = track.readyState; muted = !!track.muted; } } catch (e) { /* ignore */ }
+      const recent = grabTimes.filter(t => t >= n - 3000);
+      return {
+        videoWidth: video.videoWidth || 0, videoHeight: video.videoHeight || 0,
+        readyState: video.readyState, paused: !!video.paused, ended: !!video.ended,
+        trackState, trackMuted: muted, trackEnded: stats.trackEnded,
+        delivery: loop ? (loop.via === 'none' ? 'waiting' : loop.via) : 'stopped',
+        rvfcSupported: typeof video.requestVideoFrameCallback === 'function',
+        rvfcCallbacks: rvfcN, rvfcDelivering: n - rvfcAt <= 2000,
+        framesPerSecond: recent.length ? Math.round((recent.length / Math.max(0.5, Math.min(3, (n - loopT0) / 1000))) * 10) / 10 : 0,
+        mediaTime: clock(sig && sig.mediaTime), currentTime: clock(sig && sig.currentTime), decodedFrames: clock(sig && sig.decodedFrames),
+        totalVideoFrames: q ? q.totalVideoFrames : null,
+        stalledNow: stats.stalledNow, stalls: stats.stalls,
+        exposureLock: stats.lock.exposure, focusLock: stats.lock.focus,
+      };
+    },
+    stopLoop() { if (loop) { loop.stop(); loop = null; } if (watchdog) { env.clearInterval(watchdog); watchdog = null; } },
 
     stop() {
       api.stopLoop();
-      if (lockTimer) clearTimeout(lockTimer);
+      if (lockTimer) env.clearTimeout(lockTimer);
       if (stream) stream.getTracks().forEach(t => t.stop());
       stream = null; track = null;
       video.srcObject = null;

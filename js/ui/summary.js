@@ -30,6 +30,13 @@ function controlLog(controls) {
   return parts.join(', ');
 }
 
+// "Missed: 9 unclear digit, 3 jump too big", from reader.missReasons (camera roasts only, and only when there were misses).
+function missedLine(m) {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
+  const parts = Object.entries(m).filter(([, n]) => Number.isFinite(n) && n > 0).sort((a, b) => b[1] - a[1]).map(([label, n]) => `${n} ${label}`);
+  return parts.length ? h('p', { class: 'muted small', id: 'sum-missed' }, `Missed: ${parts.join(', ')}`) : null;
+}
+
 // logLine: false leaves out the plain-text heat and fan log (screens with a log editor show it themselves).
 // slot: an element to place between the chart and the event/phase/reader details (the Roast review card).
 // It is moved, not copied, so it survives a re-render.
@@ -67,6 +74,7 @@ export function renderRoastSummary(container, record, { units = 'F', reference =
     row('Read', `${rd.secondsRead ?? 0} s`, 'sum-read'),
     row('Rejected', String(rd.rejected ?? 0), 'sum-rejected'),
     row('Missing', `${rd.secondsMissing ?? 0} s`, 'sum-missing'),
+    missedLine(rd.missReasons),
     logLine ? h('p', { class: 'muted small' }, log ? `Heat and fan log: ${log}.` : '') : null);
 
   const canvas = h('canvas', { id: 'summary-chart', 'aria-label': 'Roast chart' });

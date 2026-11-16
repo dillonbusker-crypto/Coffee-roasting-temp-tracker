@@ -27,6 +27,9 @@ Last updated: Nov 16, 2026. This file is the hand-off log. Update it whenever a 
 
 - **Camera stall loop (fixed, awaiting confirmation on the phone).** On the user's iPhone the Setup camera panel looped between "The camera stopped sending pictures" and a one-second reconnect. Cause: `js/reader/camera.js` judged the stream alive only while the video clock advanced, and the stream was reopened every couple of seconds when it didn't. Now a stall needs positive evidence, frames are read on a timer when Safari's frame callback doesn't fire, and reopening is rare with back-off. Whether Safari really freezes that clock is unconfirmed; the "Camera details" section at the bottom of the camera panel (with a Copy button) shows what the phone reports.
 
+- **Reader loses the reading under glare or a slight lighting change (open).** Confirmed by the user on the phone after the stall fix; no wrong values reported. Work in progress on the working branch: local-contrast thresholding and exposure-invariant fade checks in `js/reader/sevenseg.js`, tested against harsher synthetic glare, exposure drift and shadows. Real failing pictures are the best test material: Setup → Camera → Camera details → "Share the last unreadable picture" exports exactly what the reader saw; add them to `test/fixtures/`.
+- **Miss reasons are now shown.** The camera panel says why it can't read, Camera details keeps a 60 s tally, and a saved roast carries `reader.missReasons`.
+
 ## Check on the real phone
 
 - The camera preview appears on Setup, and the box lines up with what the reader sees (iOS may deliver the video rotated).

@@ -28,6 +28,7 @@
 import { createCamera as realCreateCamera } from '../reader/camera.js';
 import { readDisplay as realReadDisplay } from '../reader/sevenseg.js';
 import { createReadingFilter as realCreateFilter } from '../reader/filter.js';
+import { explainMiss, explainRejection, NO_PICTURE, NO_PROBE } from './camera-reasons.js';
 
 export const STATES = {
   idle: 'Not started',
@@ -61,6 +62,8 @@ const STALL_REOPEN_MS = 6000;   // a stall (already 2 s of positive evidence) mu
 const MUTED_REOPEN_MS = 5000;   // a muted track is reopened only if it is still muted this long after the page became visible
 const RETRY_BASE_MS = 3000;     // wait between reopen attempts, doubling up to RETRY_MAX_MS
 const RETRY_MAX_MS = 30000;
+const OUTCOME_KEEP_MS = 60000;  // the per-second outcome list and tally on the details panel cover the last minute
+const WHY_MS = 2000;            // the reason shown for "can't read" is the most common one over this long
 const GOOD_RESET_MS = 20000;    // the wait goes back to the base only after the stream has stayed good this long
 
 export function classifyError(err) {
@@ -115,6 +118,15 @@ export function createCameraSource({
   const perf = { frames: 0, dropped: 0, errors: 0, msLast: 0, msAvg: 0, msMax: 0 };
   let last = null;                // latest grabbed picture: { imageData, result, crop, at }; result is the latest read, maybe of an earlier picture
   let lastResult = null;
+  const outcomes = [];            // one entry per second, last 60 s: { at, kind: value|dashes|miss|rejected|gap, label?, text?, value?, last? }
+  let roastTally = {};            // seconds that were not read, by label, since the roast started (goes into the saved record)
+  let inRoast = false;            // true once the roast controller has called start() a second time
+  let shadow = createFilter(filterCfg);   // before the roast it closes a second every second, so Setup can say what the filter thinks
+  let shadowTakenAt = -Infinity;
+  let diagTimer = null;
+  const captured = { ok: null, miss: null };   // newest readable and unreadable picture, exactly as the reader got them
+  let lastOk = null;              // newest readable picture: { value, digits, at }
+  let geom = null;                // { cropW, cropH, digitH } from the newest read that located digits
   const reads = [];               // [{ at, ms, readable }] last 5 s
   const drops = [];               // times pictures were skipped, last 5 s
   const shown = [];               // times the picture listeners were called, last 5 s
@@ -176,6 +188,17 @@ export function createCameraSource({
     while (frames.length && frames[0].at < t1 - FRAME_KEEP_MS) frames.shift();
     lastResult = res;
     if (last && last.at === f.at) last.result = res;
+    // Keep the newest readable and unreadable pictures in memory: the same pixels the reader saw, for sharing as test samples.
+    const dbg = (res && res.debug) || {};
+    const g = dbg.geometry || (dbg.hintOut && dbg.hintOut.geometry);
+    geom = { cropW: f.img.width, cropH: f.img.height, digitH: g && g.H && dbg.scale ? g.H / dbg.scale : (geom ? geom.digitH : null) };
+    if (res && res.status === 'ok') {
+      captured.ok = { imageData: f.img, status: 'ok', value: res.value, digits: res.digits, reason: null, label: null, at: f.at, w: f.img.width, h: f.img.height };
+      lastOk = { value: res.value, digits: res.digits, at: f.at };
+    } else if (res && res.status === 'none') {
+      const why = explainMiss(dbg.reason);
+      captured.miss = { imageData: f.img, status: 'none', value: null, digits: dbg.digits || null, reason: dbg.reason || 'unknown', label: why.label, at: f.at, w: f.img.width, h: f.img.height };
+    }
     for (const fn of [...readListeners]) { try { fn(last); } catch { /* ignore */ } }
   }
 
@@ -233,6 +256,7 @@ export function createCameraSource({
   function startMonitor() {
     if (monitor) return;
     monitor = timers.setInterval(checkNow, monitorMs);
+    diagTimer = timers.setInterval(diagTick, 1000);
     if (doc && !visHandler) {
       visHandler = () => {
         if (doc.visibilityState !== 'visible') return;
@@ -248,6 +272,7 @@ export function createCameraSource({
 
   function stopMonitor() {
     if (monitor) { timers.clearInterval(monitor); monitor = null; }
+    if (diagTimer) { timers.clearInterval(diagTimer); diagTimer = null; }
     if (doc && visHandler) { doc.removeEventListener('visibilitychange', visHandler); visHandler = null; }
   }
 
@@ -295,6 +320,85 @@ export function createCameraSource({
     return n % 2 ? a[(n - 1) / 2] : Math.round((a[n / 2 - 1] + a[n / 2]) / 2);
   };
 
+  // ---- closing a second, and saying why it did not give a value ----
+
+  function dominantMiss(list) {
+    const counts = new Map();
+    for (const f of list) {
+      if (!f.res || f.res.status !== 'none') continue;
+      const why = explainMiss(f.res.debug && f.res.debug.reason);
+      const c = counts.get(why.label) || { n: 0, at: 0, why };
+      c.n++; c.at = Math.max(c.at, f.at);
+      counts.set(why.label, c);
+    }
+    let best = null;
+    for (const c of counts.values()) if (!best || c.n > best.n || (c.n === best.n && c.at > best.at)) best = c;
+    return best ? best.why : null;
+  }
+
+  // Feeds `list` (the frames of one second) to `flt`, closes the second, and records what happened. `real` is the roast's
+  // own filter; the other call is the shadow filter that runs before the roast.
+  function closeInto(flt, list, at, real) {
+    for (const f of list) flt.addFrame(f.res);
+    const v = flt.closeSecond();
+    let o;
+    if (v !== null) o = { kind: 'value', value: v };
+    else if (!list.length) o = { kind: 'gap', label: NO_PICTURE.label, text: NO_PICTURE.text };
+    else {
+      const out = flt.lastOutcome ? flt.lastOutcome() : null;
+      const rej = out && explainRejection(out);
+      if (rej) o = { kind: 'rejected', label: rej.label, text: rej.text, value: out.value, last: out.last };
+      else if (out && out.kind === 'missing' && out.dashes) o = { kind: 'dashes', label: NO_PROBE.label, text: NO_PROBE.text };
+      else {
+        const why = dominantMiss(list) || explainMiss('');
+        o = { kind: 'miss', label: why.label, text: why.text };
+      }
+    }
+    o.at = at;
+    outcomes.push(o);
+    while (outcomes.length && outcomes[0].at < at - OUTCOME_KEEP_MS) outcomes.shift();
+    if (real && o.kind !== 'value') roastTally[o.label] = (roastTally[o.label] || 0) + 1;
+    return v;
+  }
+
+  const describeOutcome = (o) => {
+    if (o.kind === 'value') return String(o.value);
+    if (o.kind === 'dashes') return 'dashes';
+    if (o.kind === 'rejected') {
+      if (o.label === 'jump too big') return `jump too big (${o.last} to ${o.value})`;
+      if (o.label === 'out of range') return `out of range (${o.value})`;
+      return o.label;
+    }
+    return o.label;
+  };
+
+  function outcomeDetails(t) {
+    while (outcomes.length && outcomes[0].at < t - OUTCOME_KEEP_MS) outcomes.shift();
+    const tally = {};
+    let read = 0;
+    for (const o of outcomes) { if (o.kind === 'value') read++; else tally[o.label] = (tally[o.label] || 0) + 1; }
+    const cap = (c) => (c ? { label: c.label, reason: c.reason, digits: c.digits, value: c.value, w: c.w, h: c.h, agoMs: t - c.at } : null);
+    return {
+      tallySeconds: outcomes.length, tallyRead: read, tally,
+      lastOutcomes: outcomes.slice(-10).map(describeOutcome),
+      lastOkValue: lastOk ? lastOk.value : null, lastOkDigits: lastOk ? lastOk.digits : null, lastOkAgoMs: lastOk ? t - lastOk.at : null,
+      cropW: geom ? geom.cropW : null, cropH: geom ? geom.cropH : null, digitH: geom && geom.digitH ? Math.round(geom.digitH) : null,
+      capturedOk: cap(captured.ok), capturedMiss: cap(captured.miss),
+      roastMisses: { ...roastTally },
+    };
+  }
+
+  const secondFrames = (from) => frames.filter((f) => f.at > from && !f.stale);
+
+  // Once a second before the roast: what the filter would make of the last second. Not used for anything but the details.
+  function diagTick() {
+    if (inRoast || state !== 'live') return;
+    const at = now();
+    const from = Math.max(shadowTakenAt, at - SECOND_MS);
+    shadowTakenAt = at;
+    closeInto(shadow, secondFrames(from), at, false);
+  }
+
   const api = {
     kind: 'camera',
     get video() { return cam.video || el; },
@@ -327,7 +431,41 @@ export function createCameraSource({
         readsPerSecond: Math.round((reads.length / win) * 10) / 10,
         magnifierPerSecond: Math.round((shown.length / win) * 10) / 10,
         skipped5s: drops.length, framesDropped: perf.dropped,
+        ...outcomeDetails(t),
       };
+    },
+
+    /** One tick of the before-roast diagnostics (the details tally). The source calls this itself every second. */
+    diagTick,
+
+    /** The newest readable and unreadable pictures, as the reader got them: { ok, miss } each { imageData, reason, label, digits, value, at, w, h } or null. */
+    captured() { return { ok: captured.ok, miss: captured.miss }; },
+
+    /**
+     * Why Setup cannot read, in plain words, or null when nothing is wrong. Only for "can't read": the most common miss
+     * over the last 2 s, so it does not flicker. Also says when a value read fine but would be rejected (out of range, a
+     * big jump). Returns { kind, label, text, hint }.
+     */
+    explain() {
+      if (!GOOD.has(state)) return null;
+      const t = now();
+      const p = api.peek();
+      if (p.status === 'dashes') return null;
+      if (p.status === 'none') {
+        const recent = frames.filter((f) => f.at >= t - WHY_MS);
+        if (!recent.length) return { kind: 'miss', label: NO_PICTURE.label, text: 'No pictures from the camera yet.', hint: '' };
+        const why = dominantMiss(recent);
+        if (why) return { kind: 'miss', ...why };
+        const vals = recent.filter((f) => f.res.status === 'ok').map((f) => f.res.value);
+        if (vals.length) return { kind: 'disagree', label: 'frames disagreed', text: `The readings differ from picture to picture (${[...new Set(vals)].join(', ')}).`, hint: 'Hold the phone steady and check for glare.' };
+        return null;
+      }
+      if (p.value < filterCfg.minF || p.value > filterCfg.maxF) {
+        return { kind: 'range', label: 'out of range', text: `The reading ${p.value}°F is outside the accepted range of ${filterCfg.minF} to ${filterCfg.maxF}°F.`, hint: 'Check that the box covers only the top-right number.' };
+      }
+      const lastO = outcomes[outcomes.length - 1];
+      if (lastO && lastO.kind === 'rejected' && t - lastO.at <= 2500) return { kind: lastO.label === 'jump too big' ? 'jump' : 'disagree', label: lastO.label, text: lastO.text, hint: '' };
+      return null;
     },
     onState(fn) { stateListeners.add(fn); return () => stateListeners.delete(fn); },
     onFrame(fn) { frameListeners.add(fn); return () => frameListeners.delete(fn); },
@@ -340,6 +478,7 @@ export function createCameraSource({
       if (everLive && state !== 'stopped') {
         // Called again for the roast: keep the stream, start the roast's filter and health counters from zero.
         filter = createFilter(filterCfg);
+        inRoast = true; roastTally = {}; outcomes.length = 0;
         takenAt = -Infinity;                        // frames from the last second still belong to second 0
         for (const f of frames) f.stale = false;
         return;
@@ -407,16 +546,13 @@ export function createCameraSource({
       const at = now();
       if (missed) {
         for (const f of frames) f.stale = true;
-        filter.closeSecond();                       // counts one missing second; nothing was added to it
         takenAt = at;
-        return null;
+        return closeInto(filter, [], at, true);     // counts one missing second; nothing was added to it
       }
       const from = Math.max(takenAt, at - SECOND_MS);
-      if (GOOD.has(state)) {
-        for (const f of frames) if (f.at > from && !f.stale) filter.addFrame(f.res);
-      }
+      const list = GOOD.has(state) ? secondFrames(from) : [];
       takenAt = at;
-      return filter.closeSecond();
+      return closeInto(filter, list, at, true);
     },
 
     /** A typed reading: the filter trusts it as the last accepted value. */
@@ -426,7 +562,7 @@ export function createCameraSource({
 
     health() {
       const h = filter.health();
-      return { secondsRead: h.secondsRead, rejected: h.rejected, secondsMissing: h.secondsMissing, ...detail(h) };
+      return { secondsRead: h.secondsRead, rejected: h.rejected, secondsMissing: h.secondsMissing, missReasons: { ...roastTally }, ...detail(h) };
     },
 
     setBox(b) { cam.setBox(b); frames = []; pending = null; hint = null; misses = 0; },

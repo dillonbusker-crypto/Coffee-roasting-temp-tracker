@@ -129,6 +129,7 @@ export function renderDisplay(p) {
   const fromCells = p.fade ? cellsOf(p.fade.from) : null;
   const P = p.pitch * p.H;
   const alphas = cells.map((ch, i) => segAlphas(ch, fromCells ? fromCells[i] : undefined, p.fade || {}, rng));
+  if (p.offAlpha) alphas.forEach((a, ci) => { for (const k of SEGS) if (a[k] < p.offAlpha) a[k] = Math.max(a[k], p.offAlpha); }); // unlit segments faintly visible (see CONDITIONS.still)
   if (p.text === '---') alphas.forEach(a => { a.g = 1; });
   const gDash = Object.assign({}, g, { dash: p.text === '---' });
 
@@ -372,6 +373,16 @@ export function addConditions(rng, p, spec) {
     }
     p.glare = null;
   }
+  if (spec.still) { // a reflection that stays put: a grey band dims the upper half of every digit, a spot dims the upper right of the
+    // hundreds digit (where its b segment is), and the unlit segments of every digit show faintly (0.10-0.20 of a lit one)
+    const P = p.pitch * p.H, band = rr(rng, spec.still.band?.[0] ?? 0.3, spec.still.band?.[1] ?? 0.5), spot = rr(rng, spec.still.spot?.[0] ?? 0.5, spec.still.spot?.[1] ?? 0.78);
+    p.glares = (p.glares || []).concat([
+      { x: p.xr - P, y: p.y0 + rr(rng, 0.05, 0.25) * p.H, rx: 2.5 * P, ry: rr(rng, 0.22, 0.34) * p.H, angle: 0, amp: band, pw: 1.6 },
+      { x: p.xr - 2 * P - rr(rng, 0.0, 0.12) * P, y: p.y0 + rr(rng, 0.15, 0.3) * p.H, rx: rr(rng, 0.25, 0.4) * P, ry: rr(rng, 0.25, 0.4) * p.H, angle: 0, amp: spot, pw: 1.4 },
+    ]);
+    p.glare = null;
+    p.offAlpha = rr(rng, spec.still.off?.[0] ?? 0.1, spec.still.off?.[1] ?? 0.2) / Math.max(0.3, p.geometry.inkAlpha);
+  }
   if (spec.exposure) p.exposure = randomExposure(rng, null, spec.exposure === true ? {} : spec.exposure);
   if (spec.shadow) { // segment shadows off the reflective backing: any direction, varied strength and softness
     const g = p.geometry, ang = rng() * 6.28, dist = rr(rng, 0.015, 0.05);
@@ -391,5 +402,7 @@ export const CONDITIONS = {
   glare: { glare: [0.25, 0.6] },                 // a person still reads every segment comfortably
   glareHard: { glare: [0.6, 0.85] },             // contrast mostly gone under the glare
   glareGone: { glare: [0.92, 1.0], glareCount: 1 },
+  still: { still: true, exposure: { independent: true } }, // the second real video: a reflection that stays put, unlit segments faintly visible
+  stillStatic: { still: true },
   lighting: { shadow: true, vignette: [0.2, 0.5], gradient: [0.2, 0.5], jpeg: [0.5, 0.85], exposure: { independent: true }, glare: [0.15, 0.45], glareCount: 1 },
 };

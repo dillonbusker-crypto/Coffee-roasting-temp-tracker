@@ -309,7 +309,6 @@ const VIS_ON = 0.5, VIS_OFF = 0.9; // share of a segment's window that must show
 const HOLLOW_U = [-0.60, -0.34, 0.22, 0.38], HOLLOW_L = [-0.60, -0.34, 0.62, 0.78];
 const SEG_HOLLOW = [[0], [0], [1], [1], [1], [0], [0, 1]]; // which hollow(s) border segment a..g (0 upper, 1 lower)
 const TENT_CONTRAST = 0.14; // tentative tier: possibly lit from this share of the expected contrast up ...
-const DEDUCE_OFF_MAX = 0.03; // a deduction trusts the cell's strictly unlit segments, so they must show next to no contrast at all (measured: lit steady segments 0.3+, unlit up to 0.05)
 const TENT_MAP = 0.2;       // ... and only where the ink map also sees ink (glare and lighting gradients darken a segment's window without drawing ink there)
 const ON_CONTRAST = 0.62, ON_CONTRAST_VEILED = 0.5, OFF_CONTRAST = 0.1; // lit: dark by at least this share of the contrast a lit segment should show here; unlit: at most
 const NEIGHBOUR_T = 0.3; // ink this dark (relative to the lit segments) right of the ones cell means a digit was left out
@@ -637,35 +636,48 @@ function classify(pl, g, ev) {
       if (state === 'on') { // darkness relative to the contrast this spot should show if lit
         dn = cMax / Math.max(8, 255 - bseg); // contrast per unit of headroom: constant under a glare veil
       }
-      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, tent, cand, forcedOff: false, hidden, outside, dbg: [bseg, dExp, cMax, ev.bRef, ev.dRef], why: (fOn >= ON_T ? 'F' : '-') + (fOff <= OFF_T ? 'f' : '-') + (litByGrey ? 'G' : '-') + (unlitByGrey ? 'g' : '-') + (seen ? 's' : '-'), dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
+      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, tent, cand, softOff: false, seen, bad: planeBad, q: ev.dRef > 0 ? dExp / ev.dRef : 0, hidden, outside, dbg: [bseg, dExp, cMax, ev.bRef, ev.dRef], why: (fOn >= ON_T ? 'F' : '-') + (fOff <= OFF_T ? 'f' : '-') + (litByGrey ? 'G' : '-') + (unlitByGrey ? 'g' : '-') + (seen ? 's' : '-'), dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
     }
-    deduceCell(segs, i);
+    resolveCell(segs, i);
     cells.push({ index: i, x0: xr + BODY_L * P, x1: xr, y0: g.y0, y1: g.y0 + H, segs });
   }
   return cells;
 }
 
-// Tentative tier, second source of evidence: deduction. Segments that might be lit but show no ink in the global map (a thin
-// reflection can hide a lit segment's ink completely) are decided by the shape of the digit: when the segments judged strictly lit
-// or unlit leave exactly one way of completing the cell into a digit (or a blank), the doubtful ones are what that completion says.
-// (Wherever two completions are digits, 1 or 7 for instance, nothing is deduced.) Like every tentative verdict this only counts
-// once a second picture confirms it (confirm.js).
-const DIGIT_MASKS = new Set(Object.keys(PATTERN_TO_DIGIT).map(Number));
-function deduceCell(segs, cellIndex) {
-  const weak = segs.filter(sg => sg.cand && !sg.tent);
-  if (!weak.length || weak.length > 4) return;
-  if (segs.some(sg => sg.state === '?' && !sg.tent && !sg.cand)) return; // something else in the cell is undecided
-  if (segs.some(sg => sg.state === 'off' && sg.cRel > DEDUCE_OFF_MAX)) return; // an unlit verdict that is not clear-cut: a washed-out lit segment looks like this
-  let base = 0;
-  segs.forEach((sg, k) => { if (sg.state === 'on' || sg.tent) base |= 1 << k; });
-  const fit = [];
-  for (let sub = 0; sub < 1 << weak.length; sub++) {
-    let m = base;
-    weak.forEach((sg, j) => { if (sub >> j & 1) m |= 1 << SEG_NAMES.indexOf(sg.name); });
-    if (DIGIT_MASKS.has(m) || (cellIndex >= 1 && m === 0)) fit.push(sub);
+// Tentative tier, second source of evidence: the shape of the digit. A reflection can leave lit segments at a third to two thirds of
+// their contrast and show unlit ones at a tenth to a fifth (measured on the user's second video: unlit up to 0.21, lit 0.45 and up
+// except where a red reflection sits on one segment). Within one digit that is still an easy call for a person, who sees which
+// segments make a digit. So, per cell with something in doubt, every pattern that is a digit (or, left of the ones, a blank) is
+// priced: a lit segment costs what it falls short of LIT_REF in contrast, an unlit one what it exceeds UNLIT_REF by. A segment
+// that cannot be told (clearly dark without ink in the map: a label or a rule; brighter than the background; faint where a lit one
+// would not show clearly either) costs nothing either way, and the less veiled the spot (q), the more a faint segment counts as
+// unlit. The cell reads as the cheapest pattern if that costs at most COST_MAX and the next is dearer by at least COST_GAP;
+// otherwise nothing is read. Like every tentative verdict this only counts once a second picture confirms it
+// (confirm.js): a segment that is changing does not hold still over two pictures.
+const LIT_REF = 0.45, UNLIT_REF = 0.22, NO_MAP_C = 0.3, NO_MAP = 0.3, BRIGHT_C = -0.1, CLEAR_Q = 0.5, FULL_Q = 0.8, COST_MAX = 0.4, COST_GAP = 0.3;
+const DIGIT_MASKS = Object.keys(PATTERN_TO_DIGIT).map(Number);
+function resolveCell(segs, cellIndex) {
+  if (segs.every(sg => sg.state !== '?')) return; // nothing in doubt
+  const costLit = new Array(7), costOff = new Array(7);
+  for (let k = 0; k < 7; k++) {
+    const sg = segs[k], c = sg.cRel;
+    if (sg.outside || sg.bad || (sg.state === '?' && !sg.seen)) return; // cannot be judged at all
+    if (sg.state === 'on') { costLit[k] = 0; costOff[k] = 9; }
+    else if (c >= NO_MAP_C && sg.fMap < NO_MAP) { costLit[k] = 0; costOff[k] = 0; }
+    else if (c < BRIGHT_C || (c <= UNLIT_REF && sg.q < CLEAR_Q)) { costLit[k] = 0; costOff[k] = 0; } // brighter than the background (glare), or too veiled to say
+    else { costLit[k] = Math.max(0, LIT_REF - c) * Math.min(1, (sg.q - CLEAR_Q) / (FULL_Q - CLEAR_Q)); costOff[k] = Math.max(0, c - UNLIT_REF); }
   }
-  if (fit.length !== 1) return;
-  weak.forEach((sg, j) => { if (fit[0] >> j & 1) sg.tent = true; else sg.forcedOff = true; });
+  let best = 1e9, bestM = -1, second = 1e9;
+  for (const m of cellIndex >= 1 ? [0, ...DIGIT_MASKS] : DIGIT_MASKS) {
+    let cost = 0;
+    for (let k = 0; k < 7; k++) cost += m >> k & 1 ? costLit[k] : costOff[k];
+    if (cost < best) { second = best; best = cost; bestM = m; } else if (cost < second) second = cost;
+  }
+  if (best > COST_MAX || second - best < COST_GAP) return;
+  segs.forEach((sg, k) => {
+    if (sg.state === 'on') return;
+    if (bestM >> k & 1) sg.tent = true; else if (sg.state !== 'off') sg.softOff = true;
+  });
 }
 
 // Two attempts: the normal one (digits fill most of the crop), then a finer one for loosely drawn boxes (digits less than
@@ -753,13 +765,11 @@ function decodeAt(planes, best, base, pre, ref) {
   const strict = readCells(cells, debug, best, pl, pre, ev, false);
   // Per-segment evidence of this frame, for confirming it against a neighbour in time (confirm.js): which segments read as lit and
   // how strongly. Present whenever every segment was judged, strictly or tentatively.
-  const judged = cells.every(c => c.segs.every(sg => sg.state !== '?' || sg.tent || sg.forcedOff));
+  const judged = cells.every(c => c.segs.every(sg => sg.state !== '?' || sg.tent || sg.softOff));
   if (judged) {
     const masksT = cells.map(c => c.segs.reduce((m, sg, k) => m | ((sg.state === 'on' || sg.tent) ? 1 << k : 0), 0));
     strict.debug.seg7 = { masks: masksT, c: cells.map(c => c.segs.map(sg => +sg.cRel.toFixed(3))), strict: strict.status !== 'none' };
-    // A tentative reading builds on the strict verdicts of the other segments, so none of them may itself look possibly lit.
-    const offDoubt = cells.some(c => c.segs.some(sg => sg.state === 'off' && sg.cRel > TENT_CONTRAST));
-    if (strict.status === 'none' && strict.debug.reason === 'ambiguous segment' && !offDoubt) {
+    if (strict.status === 'none' && strict.debug.reason === 'ambiguous segment') {
       const t = readCells(cells, Object.assign({}, debug), best, pl, pre, ev, true);
       if (t.status === 'ok') strict.debug.tentative = { value: t.value, digits: t.digits, confidence: t.confidence };
     }
@@ -775,7 +785,7 @@ function readCells(cells, debug, best, pl, pre, ev, tentative) {
   cells.forEach((c, i) => c.segs.forEach((sg, s) => {
     if (sg.state === 'on' || (tentative && sg.tent)) { masks[i] |= 1 << s; minMargin = Math.min(minMargin, sg.state === 'on' ? (sg.fOn - ON_T) / (1 - ON_T) : 0); }
     else if (sg.state === 'off') minMargin = Math.min(minMargin, (OFF_T - sg.fOff) / OFF_T);
-    else if (tentative && sg.forcedOff) minMargin = 0;
+    else if (tentative && sg.softOff) minMargin = 0;
     else {
       if (sg.hidden) hiddenSeg = hiddenSeg || { cell: i, seg: sg.name, visWin: sg.visWin };
       if (sg.outside) cutSeg = cutSeg || { cell: i, seg: sg.name };

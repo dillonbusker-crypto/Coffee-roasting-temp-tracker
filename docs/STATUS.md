@@ -1,6 +1,6 @@
 # Roast Tracker: build status
 
-Last updated: Nov 16, 2026. This file is the hand-off log. Update it whenever a milestone lands.
+Last updated: Nov 17, 2026. This file is the hand-off log. Update it whenever a milestone lands.
 
 ## Where things are
 
@@ -20,7 +20,7 @@ Last updated: Nov 16, 2026. This file is the hand-off log. Update it whenever a 
 ## Pending, in order
 
 1. **First run on the iPhone.** Open the live site in Safari, allow the camera, and check the list under "Check on the real phone" below.
-2. **Run the user's test media through the reader.** About 10 photos and a 1-minute video, due Nov 16. Step 1 stays provisional until they meet the spec's accuracy target. Add them to `test/fixtures/` as regression cases. The reader has only seen the digits 0, 1, 2, 4, 5, 6, 7 and the dashes on the real display; check how a real 3, 8 and 9 are drawn (a 9 without its bottom bar would be missed, not misread).
+2. **Make the reader meet the spec's accuracy target on the user's video.** The media arrived Nov 17 and is in `test/fixtures/`; see "Found on the real phone". Step 1 stays provisional until the video reaches 98% of seconds correct with 0 wrong.
 3. **Field test and tuning.** Replace the provisional 410°F first-crack reading with the first logged roast. Tune pace-cue timing against real curves. Check the roast review's rate-of-rise findings against real roasts: a normal first-crack bump may read as a "flick", noisy readings may read as a "crash", and a slow first minute may read as a stall. The thresholds are named constants at the top of `js/core/review.js`.
 
 ## Found on the real phone
@@ -32,6 +32,13 @@ Last updated: Nov 16, 2026. This file is the hand-off log. Update it whenever a 
   - *Glare: safer, better, not solved.* The old reader could read a wrong number when glare washed out a lit segment (77 read as 17, 425 as 125 on the real crops with synthetic glare). Each segment is now judged against the local background of its own digit, and a segment that cannot be proven lit or unlit makes the frame a miss. Wrong reads: 0 in every glare, exposure and lighting set. Frames read: faint glare 93%, glare veil 25–60% about 49% (was 30%), heavier glare mostly missed. A fixed glare patch on a digit is not averaged away: one placement of a 40% patch loses about 90% of seconds.
   - *Costs.* About 45–50 ms per read frame and 100–135 ms per unread frame in desktop Chromium (was 31–35 and 60–90). A digit cut by the box edge is now refused with its own reason instead of being read from what is visible.
   - *Next.* Real failing pictures decide the next round: Setup → Camera → Camera details → "Share the last unreadable picture" exports exactly what the reader saw; add them to `test/fixtures/`. Thin bright streaks and spots are the main remaining failure. A looser lit threshold reads more glare frames but let one mid-change frame through (256→257 read as 258), so it was not taken.
+- **First real roast and the user's test media (Nov 17, open).** The user ran a first roast ("First batch - esp", saved in the phone's history) and the camera had trouble holding the reading. They sent 8 photos and a 45 s video of the display cooling from 280 to 169; both are now fixtures (`test/fixtures/photos/tp17-*-cooldown.jpg` with `cooldown.json`, `test/fixtures/video-cooldown/` with `truth.json`).
+  - *Photos:* 8 of 8 read correctly with the app's widened box. A real 3, 8 and 9 look as expected (the 9 has its bottom bar).
+  - *Video:* at the app's 4 frames per second the released reader gets 63% of frames and about 71% of seconds, 0 wrong. Every miss is "ambiguous segment" on the right-hand digit.
+  - *Cause 1:* a reddish reflection over the right-hand digit leaves its lit segments at 25–65% of the contrast the reader expects (it demands 62%). Unlit segments in the same frames are at 7% or less, so a person reads them easily.
+  - *Cause 2:* the TP17 refreshes every 0.5 s, not every second. A segment turning on takes about 70 ms; one turning off leaves a pale ghost for up to 200 ms. At 4 frames per second too few frames are clean.
+  - *Fix in progress (working branch):* accept a weaker lit segment only when the previous frame, a fraction of a second earlier, shows the same pattern at the same contrast (a reflection holds still, a changing digit does not); raise the sampling rate as far as needed; make the synthetic change model match the measured one. Pass mark: 98% of seconds correct on the real video, 0 wrong.
+  - *Still wanted:* the JSON export of the saved roast, for its `reader.missReasons`.
 - **Miss reasons are now shown.** The camera panel says why it can't read, Camera details keeps a 60 s tally, and a saved roast carries `reader.missReasons`.
 
 ## Check on the real phone

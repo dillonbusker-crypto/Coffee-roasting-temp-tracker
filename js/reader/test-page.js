@@ -574,7 +574,7 @@ async function stopSoak(why) {
   const wlOk = soak.wlState.startsWith('held') && soak.wlReleased === 0 && wlHeldAtEnd;
   const lines = [
     `Soak test ${why}: ${fmtTime(ranS)} of ${fmtTime(soak.durationS)} planned`,
-    `Seconds: ${h.secondsRead} read, ${h.rejected} rejected (range ${h.rejectedRange}, jump ${h.rejectedJump}, frames disagreed ${h.rejectedDisagree}), ${h.secondsMissing} missing, of ${soak.tick}`,
+    `Seconds: ${h.secondsRead} read, ${h.rejected} rejected (range ${h.rejectedRange}, jump ${h.rejectedJump}, frames disagreed ${h.rejectedDisagree}, impossible number ${h.rejectedImpossible}), ${h.secondsMissing} missing, of ${soak.tick}`,
     `Read rate: ${readPct.toFixed(1)}% of seconds (a camera pointed at something other than the digits reads nothing)`,
     `Screen wake lock: ${soak.wlState === 'unsupported' ? 'UNSUPPORTED in this browser' : wlOk ? 'held for the whole run' : `NOT held for the whole run (${soak.wlState}; released ${soak.wlReleased} time${soak.wlReleased === 1 ? '' : 's'})`}`,
     `Camera stream: ${stalls || cs.trackEnded ? `${stalls} stall${stalls === 1 ? '' : 's'}, longest ${(cs.longestStallMs / 1000).toFixed(1)} s${cs.trackEnded ? ', track ENDED' : ''}` : 'never stalled'}`,

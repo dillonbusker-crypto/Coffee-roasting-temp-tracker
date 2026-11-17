@@ -132,7 +132,7 @@ export const GROUPS = {
     f('reader.maxF', 'Accepted range, highest reading', 'temp', 200, 572, {
       check: (v, s) => (v <= s.reader.minF ? 'Must be above the lowest reading.' : null),
     }),
-    f('reader.maxJumpF', 'Jump limit between readings', 'delta', 3, 100, { hint: 'A reading that jumps further than this is rejected.' }),
+    f('reader.maxJumpF', 'Jump limit between readings', 'delta', 3, 100, { hint: 'A reading that jumps further than this, with no trend to explain it, waits until the next seconds agree with it.' }),
   ],
 };
 

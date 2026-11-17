@@ -308,7 +308,9 @@ const VIS_ON = 0.5, VIS_OFF = 0.9; // share of a segment's window that must show
 // they give the local background level right next to each segment, whatever a glare patch is doing to the picture there.
 const HOLLOW_U = [-0.60, -0.34, 0.22, 0.38], HOLLOW_L = [-0.60, -0.34, 0.62, 0.78];
 const SEG_HOLLOW = [[0], [0], [1], [1], [1], [0], [0, 1]]; // which hollow(s) border segment a..g (0 upper, 1 lower)
-const TENT_CONTRAST = 0.14; // tentative tier: possibly lit from this share of the expected contrast up
+const TENT_CONTRAST = 0.14; // tentative tier: possibly lit from this share of the expected contrast up ...
+const DEDUCE_OFF_MAX = 0.03; // a deduction trusts the cell's strictly unlit segments, so they must show next to no contrast at all (measured: lit steady segments 0.3+, unlit up to 0.05)
+const TENT_MAP = 0.2;       // ... and only where the ink map also sees ink (glare and lighting gradients darken a segment's window without drawing ink there)
 const ON_CONTRAST = 0.62, ON_CONTRAST_VEILED = 0.5, OFF_CONTRAST = 0.1; // lit: dark by at least this share of the contrast a lit segment should show here; unlit: at most
 const NEIGHBOUR_T = 0.3; // ink this dark (relative to the lit segments) right of the ones cell means a digit was left out
 const ON_LOOSE = 0.5; // registration only: a segment counts as lit above this
@@ -621,24 +623,49 @@ function classify(pl, g, ev) {
       // "possibly lit" when it is uniformly darker than the local background by a fair share of what a lit segment should show. Such a
       // verdict is only ever used together with strict-off verdicts for all the other segments, and only after a second frame has
       // confirmed it (see confirm.js): a segment half way through changing looks the same in one frame but not over two.
-      let tent = false;
+      let cand = false; // possibly lit
       if (state === '?' && !outside && !planeBad && seen && cMax >= TENT_CONTRAST * dExp + 2 * ev.sigma) {
         let best = 0;
         for (const k of [-1, 0, 1]) {
           const sx = bar ? 0 : k * dx, sy = bar ? k * dy : 0;
           best = Math.max(best, darkShareP(ev, x0 + sx, ya + sy, x1 + sx, yb + sy, planeAt, 0.5 * cMax));
         }
-        tent = best >= 0.85;
+        cand = best >= 0.85;
       }
+      const tent = cand && fMap >= TENT_MAP; // possibly lit, and the ink map sees ink there too
       let dn = 0;
       if (state === 'on') { // darkness relative to the contrast this spot should show if lit
         dn = cMax / Math.max(8, 255 - bseg); // contrast per unit of headroom: constant under a glare veil
       }
-      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, tent, hidden, outside, dbg: [bseg, dExp, cMax, ev.bRef, ev.dRef], why: (fOn >= ON_T ? 'F' : '-') + (fOff <= OFF_T ? 'f' : '-') + (litByGrey ? 'G' : '-') + (unlitByGrey ? 'g' : '-') + (seen ? 's' : '-'), dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
+      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, tent, cand, forcedOff: false, hidden, outside, dbg: [bseg, dExp, cMax, ev.bRef, ev.dRef], why: (fOn >= ON_T ? 'F' : '-') + (fOff <= OFF_T ? 'f' : '-') + (litByGrey ? 'G' : '-') + (unlitByGrey ? 'g' : '-') + (seen ? 's' : '-'), dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
     }
+    deduceCell(segs, i);
     cells.push({ index: i, x0: xr + BODY_L * P, x1: xr, y0: g.y0, y1: g.y0 + H, segs });
   }
   return cells;
+}
+
+// Tentative tier, second source of evidence: deduction. Segments that might be lit but show no ink in the global map (a thin
+// reflection can hide a lit segment's ink completely) are decided by the shape of the digit: when the segments judged strictly lit
+// or unlit leave exactly one way of completing the cell into a digit (or a blank), the doubtful ones are what that completion says.
+// (Wherever two completions are digits, 1 or 7 for instance, nothing is deduced.) Like every tentative verdict this only counts
+// once a second picture confirms it (confirm.js).
+const DIGIT_MASKS = new Set(Object.keys(PATTERN_TO_DIGIT).map(Number));
+function deduceCell(segs, cellIndex) {
+  const weak = segs.filter(sg => sg.cand && !sg.tent);
+  if (!weak.length || weak.length > 4) return;
+  if (segs.some(sg => sg.state === '?' && !sg.tent && !sg.cand)) return; // something else in the cell is undecided
+  if (segs.some(sg => sg.state === 'off' && sg.cRel > DEDUCE_OFF_MAX)) return; // an unlit verdict that is not clear-cut: a washed-out lit segment looks like this
+  let base = 0;
+  segs.forEach((sg, k) => { if (sg.state === 'on' || sg.tent) base |= 1 << k; });
+  const fit = [];
+  for (let sub = 0; sub < 1 << weak.length; sub++) {
+    let m = base;
+    weak.forEach((sg, j) => { if (sub >> j & 1) m |= 1 << SEG_NAMES.indexOf(sg.name); });
+    if (DIGIT_MASKS.has(m) || (cellIndex >= 1 && m === 0)) fit.push(sub);
+  }
+  if (fit.length !== 1) return;
+  weak.forEach((sg, j) => { if (fit[0] >> j & 1) sg.tent = true; else sg.forcedOff = true; });
 }
 
 // Two attempts: the normal one (digits fill most of the crop), then a finer one for loosely drawn boxes (digits less than
@@ -661,7 +688,10 @@ export function readDisplay(img, opts = {}) {
     if (r.debug.reason === 'low contrast') break;
     // the finer pass is for loosely drawn boxes: only when the digits were not found, or found small relative to the crop
     const g = r.debug.geometry;
-    if (g && g.H >= 0.55 * r.debug.h && /glare|fade|contrast|ambiguous/.test(r.debug.reason || '')) break; // a finer look cannot fix glare, a fade, an ambiguous segment or low contrast
+    if (g && g.H >= 0.55 * r.debug.h && /glare|fade|contrast/.test(r.debug.reason || '')) break; // a finer look cannot fix glare, a fade or low contrast
+    // with a hint (the digits were located a moment ago, so the box is not a loose one) a segment in doubt is no reason to look again
+    // at a finer size: that only costs time
+    if (g && opts.hint && g.H >= 0.55 * r.debug.h && /ambiguous/.test(r.debug.reason || '')) break;
   }
   res.debug.ms = typeof performance !== 'undefined' ? performance.now() - t0 : 0;
   return res;
@@ -723,11 +753,13 @@ function decodeAt(planes, best, base, pre, ref) {
   const strict = readCells(cells, debug, best, pl, pre, ev, false);
   // Per-segment evidence of this frame, for confirming it against a neighbour in time (confirm.js): which segments read as lit and
   // how strongly. Present whenever every segment was judged, strictly or tentatively.
-  const judged = cells.every(c => c.segs.every(sg => sg.state !== '?' || sg.tent));
+  const judged = cells.every(c => c.segs.every(sg => sg.state !== '?' || sg.tent || sg.forcedOff));
   if (judged) {
     const masksT = cells.map(c => c.segs.reduce((m, sg, k) => m | ((sg.state === 'on' || sg.tent) ? 1 << k : 0), 0));
     strict.debug.seg7 = { masks: masksT, c: cells.map(c => c.segs.map(sg => +sg.cRel.toFixed(3))), strict: strict.status !== 'none' };
-    if (strict.status === 'none' && strict.debug.reason === 'ambiguous segment') {
+    // A tentative reading builds on the strict verdicts of the other segments, so none of them may itself look possibly lit.
+    const offDoubt = cells.some(c => c.segs.some(sg => sg.state === 'off' && sg.cRel > TENT_CONTRAST));
+    if (strict.status === 'none' && strict.debug.reason === 'ambiguous segment' && !offDoubt) {
       const t = readCells(cells, Object.assign({}, debug), best, pl, pre, ev, true);
       if (t.status === 'ok') strict.debug.tentative = { value: t.value, digits: t.digits, confidence: t.confidence };
     }
@@ -743,6 +775,7 @@ function readCells(cells, debug, best, pl, pre, ev, tentative) {
   cells.forEach((c, i) => c.segs.forEach((sg, s) => {
     if (sg.state === 'on' || (tentative && sg.tent)) { masks[i] |= 1 << s; minMargin = Math.min(minMargin, sg.state === 'on' ? (sg.fOn - ON_T) / (1 - ON_T) : 0); }
     else if (sg.state === 'off') minMargin = Math.min(minMargin, (OFF_T - sg.fOff) / OFF_T);
+    else if (tentative && sg.forcedOff) minMargin = 0;
     else {
       if (sg.hidden) hiddenSeg = hiddenSeg || { cell: i, seg: sg.name, visWin: sg.visWin };
       if (sg.outside) cutSeg = cutSeg || { cell: i, seg: sg.name };

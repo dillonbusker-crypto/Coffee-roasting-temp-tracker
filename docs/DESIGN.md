@@ -26,6 +26,7 @@ js/core/review.js          after-roast review (pure)
 js/core/settings.js        defaults, load, save
 js/core/units.js           °F/°C formatting
 js/reader/sevenseg.js      ImageData -> digits (pure)
+js/reader/confirm.js       tentative frame + the frame before it -> ok or miss (pure)
 js/reader/filter.js        frames -> one accepted value per second (pure)
 js/reader/camera.js        getUserMedia, crop box, frame grabbing
 js/sources/camera-source.js, simulator-source.js, manual-source.js
@@ -116,7 +117,7 @@ At most one roast per coffee name has `reference.coffee`, and at most one roast 
 
 - **Simulator:** a first-order model, `dT/dt = (Tenv(heat, fan) - T) / tau`, output rounded to whole °F like the TP17. Presets: `on-target`, `fast`, `slow`, `stall`, `ror-climb`, `dropout`, plus replay of a saved roast. Presets are parameter sets and scripted disturbances, so tapping heat in demo mode changes the curve.
 - **Manual:** sparse typed readings; every other second is a gap. A typed value during a camera roast is injected for that second and re-anchors the camera filter.
-- **Camera:** `camera.js` grabs the crop at 4 fps, `sevenseg.js` reads each frame, `filter.js` closes each second.
+- **Camera:** `camera.js` grabs the crop at 7.5 fps (`settings.reader.fps`), `sevenseg.js` reads each frame, `confirm.js` checks a tentative frame against the one before it, `filter.js` closes each second. The rate is set by the display: the TP17 redraws every 0.5 s, and a confirmation needs two pictures of the same redraw, at most 400 ms apart. 5 fps is the lowest rate that still works.
 
 ### `js/reader/sevenseg.js` (pure, no DOM beyond ImageData)
 
@@ -129,7 +130,19 @@ readDisplay(imageData, opts?) ->
 - A frame is `ok` only if every segment of every digit is clearly on or clearly off and each pattern is a real digit. Anything doubtful is `none`. A missed frame is fine; a wrong value is not.
 - Each segment is judged against the local background of its own digit (a plane fitted to the digit's cell, ignoring ink), and the contrast a lit segment should show is scaled by the headroom to white, because glare adds light. A segment that cannot be proven lit or unlit is doubtful. A lattice window outside the crop is doubtful too.
 - Lit segments must look alike within a digit and across the three digits; a lighter one means the display is half way through a change. This is checked inside one frame only, never against earlier frames, so a change of camera exposure between frames cannot cause a miss. `opts.hint` carries geometry only.
+- **Tentative tier.** A lit segment under a reflection shows a quarter to a half of its normal contrast, which is too little to call lit from one picture. When that is all that keeps a frame from reading, `readDisplay` still returns `none` but adds `debug.tentative { value, digits, confidence }` and `debug.seg7 { masks, c, strict }` (the lit pattern and each segment's contrast as a share of the expected one). A doubtful segment counts as possibly lit when it is evenly dark from 0.14 of the expected contrast and the ink map shows ink there, or when the clearly judged segments of its digit leave exactly one digit it can complete. No tentative reading is offered if any segment judged unlit shows more than 0.14.
 - `debug.reason` says why a frame is `none`. `js/sources/camera-reasons.js` turns each reason into the wording shown to the user; a new reason needs an entry there.
+
+### `js/reader/confirm.js` (pure)
+
+```js
+const c = createConfirmer()
+c.step(readResult, atMs) -> the same result, an upgraded `ok` one, or a miss with reason 'unconfirmed reading'; c.reset()
+```
+
+- A tentative frame becomes `ok` only if the frame just before it, 30 to 400 ms earlier, shows the same lit pattern with every segment's contrast within 0.15. A reflection holds still between two pictures; a segment that is switching does not (measured on the TP17: on in about 100 ms, off in about 70 ms with a faint ghost for 200 ms more).
+- Only the frame immediately before counts. A strictly read frame can serve as that earlier frame.
+- The caller owns the confirmer and resets it when the camera restarts or the box moves. `readDisplay` stays pure.
 
 ### `js/reader/filter.js` (pure)
 
@@ -138,8 +151,10 @@ const f = createReadingFilter({ minF: 50, maxF: 550, maxJumpF: 15 })
 f.addFrame(frameResult); f.closeSecond() -> value | null; f.reanchor(value); f.health()
 ```
 
-- Per second: median of that second's `ok` frames, then the range and jump checks.
-- **Jump check is gap-aware (a refinement of the spec's flat 15°F).** The allowed jump is 15°F plus 2°F for each second since the last accepted value. If 5 consecutive seconds are rejected for jump but agree with each other, the filter re-anchors to them. Without this, one long dropout during a fast climb would lock the reader out for the rest of the roast.
+- **Only values the thermometer can show.** The TP17 measures whole °C and shows the °F conversion, so every displayed value is `round(1.8 × c + 32)`; 4 of every 9 whole °F numbers never appear. A frame that reads one of those is a misread and is not counted (`wholeCelsius: true`; outcome kind `impossible`). This rests on one unit and the user's first roast, photos and video.
+- **Per second: a value that was seen, never an average.** The second's value is the latest one that at least two frames read, or the latest frame's value when none has two. The display redraws twice a second, so a second can hold two real values and the later one is the better reading. Frames more than 12°F apart with no majority end the second as `disagree`.
+- **Jump check follows the trend (a refinement of the spec's flat 15°F).** A value is accepted at once if it is within 9°F of the last accepted one (plus 2°F per second beyond the first), or within 7°F (plus 1°F per second) of where the recent trend points; with no trend, within `maxJumpF` plus 5°F per second, 40°F at most. Anything else is a candidate. Three candidates in a row that agree with each other become the new anchor, or two when the last accepted reading is more than 6 s old. So one wrong second is never accepted, and a real change after a dropout costs one or two seconds. The old rule (15°F + 2°F/s, re-anchor after 5 agreeing seconds) could lock the reader out for up to 30 s on the Popper's early climb.
+- `health()` counts seconds read, missing and rejected by cause (`rejectedRange`, `rejectedJump`, `rejectedDisagree`, `rejectedImpossible`); `lastOutcome()` says what the last second did.
 
 ### `js/core/cues.js` (pure)
 

@@ -577,7 +577,7 @@ export function createCameraSource({
     setControl() {},
   };
 
-  const detail = (h) => ({ rejectedRange: h.rejectedRange, rejectedJump: h.rejectedJump, dashSeconds: h.dashSeconds, reanchors: h.reanchors, lastAccepted: h.lastAccepted });
+  const detail = (h) => ({ rejectedRange: h.rejectedRange, rejectedJump: h.rejectedJump, rejectedDisagree: h.rejectedDisagree, rejectedImpossible: h.rejectedImpossible, dashSeconds: h.dashSeconds, reanchors: h.reanchors, lastAccepted: h.lastAccepted });
 
   return api;
 }

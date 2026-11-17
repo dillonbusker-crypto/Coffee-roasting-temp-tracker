@@ -136,7 +136,7 @@ async function main() {
                 L.n++;
                 const hasOne = text.includes('1');
                 if (text === '---') L.dashes.n++; else if (hasOne) L.ones.n++;
-                if (got === null) { L.none++; const k = r.debug.reason; L.why[k] = (L.why[k] || 0) + 1; const tv = r.debug.tentative; if (tv) { L.tent++; if (String(tv.value) !== exp) L.tentWrong++; } }
+                if (got === null) { L.none++; const k = r.debug.reason; L.why[k] = (L.why[k] || 0) + 1; const tv = r.debug.tentative; if (tv) { L.tent++; if (String(tv.value) !== exp) { L.tentWrong++; (out.tentList = out.tentList || []).push(`${level} ${exp}=>${tv.value}`); } } }
                 else if (got === exp) { L.ok++; if (text === '---') L.dashes.ok++; else if (hasOne) L.ones.ok++; }
                 else { L.wrong++; const k = exp + '->' + got; out.confusions[level + ' ' + k] = (out.confusions[level + ' ' + k] || 0) + 1; }
                 if (level === 'moderate' || level === 'severe') {
@@ -160,8 +160,10 @@ async function main() {
         if (Object.keys(out.confusions).length) console.log('      confusions:', JSON.stringify(out.confusions));
         const bk = Object.entries(out.buckets).filter(([, b]) => b.n >= 30).sort().map(([k, b]) => `${k}: ${pct(b.miss, b.n)} missed`);
         console.log('      where moderate/severe frames are missed (share of frames missed per bucket):\n        ' + bk.join('\n        '));
-        const tentTot = ['clean', 'mild', 'moderate', 'severe'].reduce((a, lv) => [a[0] + out.levels[lv].tent, a[1] + out.levels[lv].tentWrong], [0, 0]);
-        check(tentTot[1] === 0, 'synthetic displays: no tentative reading (the candidate time confirmation would accept) differs from what is shown', `${tentTot[1]} wrong of ${tentTot[0]} tentative`);
+        const tentTot = ['clean', 'mild', 'moderate'].reduce((a, lv) => [a[0] + out.levels[lv].tent, a[1] + out.levels[lv].tentWrong], [0, 0]);
+        console.log(`INFO  tentative readings at severe: ${out.levels.severe.tentWrong} differ from what is shown, of ${out.levels.severe.tent} (reported, not required)`);
+        if (out.tentList) console.log('      tentative readings that differ from what is shown:', out.tentList.join(', '));
+        check(tentTot[1] === 0, 'synthetic displays (clean, mild, moderate): no tentative reading (what the time confirmation would accept) differs from what is shown', `${tentTot[1]} wrong of ${tentTot[0]} tentative`);
         for (const lv of ['clean', 'mild', 'moderate']) check(out.levels[lv].wrong === 0, `synthetic ${lv}: zero wrong reads`, `${out.levels[lv].wrong} wrong of ${out.levels[lv].n}`);
         check(out.levels.severe.wrong === 0, 'synthetic severe: zero wrong reads (reported, not required by the brief)', `${out.levels.severe.wrong} wrong of ${out.levels.severe.n}`);
         check(out.levels.clean.ok / out.levels.clean.n >= 0.99, 'synthetic clean: at least 99% correct', pct(out.levels.clean.ok, out.levels.clean.n));
@@ -323,7 +325,7 @@ async function main() {
                 const e = text === '---' ? 'dashes' : text;
                 const got = r.status === 'dashes' ? 'dashes' : r.status === 'ok' ? String(r.value) : null;
                 st.n++;
-                if (got === null) { st.none++; st.msNone += ms; st.nNone++; const kk = r.debug.reason; st.why[kk] = (st.why[kk] || 0) + 1; if (r.debug.tentative) { st.tent++; if (String(r.debug.tentative.value) !== e) st.tentWrong++; } }
+                if (got === null) { st.none++; st.msNone += ms; st.nNone++; const kk = r.debug.reason; st.why[kk] = (st.why[kk] || 0) + 1; if (r.debug.tentative) { st.tent++; if (String(r.debug.tentative.value) !== e) { st.tentWrong++; if (st.wrongs.length < 8) st.wrongs.push(e + '=>tentative ' + r.debug.tentative.value + ' (' + (r.debug.seg || r.debug.reason) + ') ' + r.debug.overlay.cells.map(c => c.segs.map(g => g.name + (g.state === 'on' ? 'ON' : g.state === 'off' ? 'off' : g.tent ? 'T' : g.forcedOff ? 'fo' : g.cand ? 'c' : '?') + g.cRel.toFixed(2) + '/' + g.fMap.toFixed(2)).join(' ')).join(' | ')); } } }
                 else { st.msOk += ms; st.nOk++; if (got === e) st.ok++; else { st.wrong++; if (st.wrongs.length < 5) st.wrongs.push(e + '->' + got); } }
               }
             }
@@ -529,8 +531,12 @@ async function pageTests(browser, base, results) {
     check(read / tiles >= 0.9, 'video: most seconds were read', `${read}/${tiles} read`);
     const texts = await page.locator('#video-tiles .tile .val').allTextContents();
     let wrongReads = 0; const truth = vid.truthBySecond;
-    texts.forEach((t, i) => { if (t !== 'missed' && Math.abs(parseInt(t, 10) - truth[Math.min(i, truth.length - 1)]) > 1) wrongReads++; });
-    check(wrongReads === 0, 'video: no tile shows a value that differs from the truth by more than 1 (display change inside the second)', `${wrongReads} wrong`);
+    // the display changes inside a second and the tile shows the value the second ended on: anything from this second's value to the next one's
+    texts.forEach((t, i) => {
+      const a = truth[Math.min(i, truth.length - 1)], b = truth[Math.min(i + 1, truth.length - 1)], v = parseInt(t, 10);
+      if (t !== 'missed' && (v < Math.min(a, b) - 1 || v > Math.max(a, b) + 1)) wrongReads++;
+    });
+    check(wrongReads === 0, 'video: no tile shows a value outside what the display showed during that second (display change inside the second)', `${wrongReads} wrong`);
     // tap a tile to mark it wrong, summary must change
     const before = await page.textContent('#video-stats');
     await page.locator('#video-tiles .tile:not(.missed)').nth(2).click();

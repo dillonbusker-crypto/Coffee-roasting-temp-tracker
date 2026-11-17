@@ -21,7 +21,8 @@ Last updated: Nov 17, 2026. This file is the hand-off log. Update it whenever a 
 
 1. **First run on the iPhone.** Open the live site in Safari, allow the camera, and check the list under "Check on the real phone" below.
 2. **Second real roast with the reworked reader** (released Nov 17, see "Found on the real phone"). What to watch: does the reading hold through the fast climb in the first 90 s, does the preview stay smooth at 7.5 pictures a second, and what Camera details says when a reading is lost. Afterwards send Settings → Data → Export all.
-3. **Field test and tuning.** Replace the provisional 410°F first-crack reading with the first logged roast. Tune pace-cue timing against real curves. Check the roast review's rate-of-rise findings against real roasts: a normal first-crack bump may read as a "flick", noisy readings may read as a "crash", and a slow first minute may read as a stall. The thresholds are named constants at the top of `js/core/review.js`.
+3. **One box instead of two in Setup (decided Nov 17, after round 4 lands).** The reader already looks at one area: the user's solid box plus the dashed widening. Show that as a single box with faint marks for three digit positions, so the user lines the right-hand two up with the digits and nothing is added out of sight. Convert a saved box to the same area. Touches `js/ui/camera-panel.js`, `js/ui/crop-box.js` and `expandBoxForDigits` in `js/reader/camera.js`.
+4. **Field test and tuning.** Replace the provisional 410°F first-crack reading with the first logged roast. Tune pace-cue timing against real curves. Check the roast review's rate-of-rise findings against real roasts: a normal first-crack bump may read as a "flick", noisy readings may read as a "crash", and a slow first minute may read as a stall. The thresholds are named constants at the top of `js/core/review.js`.
 
 ## Found on the real phone
 

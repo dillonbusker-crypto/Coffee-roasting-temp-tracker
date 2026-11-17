@@ -66,7 +66,7 @@ export const DEFAULTS = {
   },
 
   // Reading filter and camera
-  reader: { minF: 50, maxF: 550, maxJumpF: 15, fps: 4 },
+  reader: { minF: 50, maxF: 550, maxJumpF: 15, fps: 7.5 },
 };
 
 export const ROR_WINDOW_OPTIONS = [15, 30, 45];
@@ -103,7 +103,10 @@ function defaultStorage() {
 export function loadSettings(storage = defaultStorage()) {
   try {
     const raw = storage && storage.getItem(STORAGE_KEY);
-    return mergeSettings(raw ? JSON.parse(raw) : null);
+    const out = mergeSettings(raw ? JSON.parse(raw) : null);
+    // 4 was the old default frame rate, saved along with everything else. The reader now needs 7.5 (reader/confirm.js).
+    if (out.reader.fps === 4) out.reader.fps = DEFAULTS.reader.fps;
+    return out;
   } catch {
     return clone(DEFAULTS);
   }

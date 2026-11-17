@@ -52,9 +52,12 @@ function fakeCameraInit(opts) {
     calls: 0, streams: [], log: [], mode: 'hold', curving: false, value: 77, startVal: 77, rate: 2.5, t0: 0, phase: 0.37,
     available: opts.available !== false, deny: opts.deny || null, ready: null, drawn: 0,
     startCurve(startVal = 77, rate = 2.5) { fake.mode = 'curve'; fake.curving = true; fake.startVal = startVal; fake.rate = rate; fake.t0 = Date.now(); },
+    // The TP17 shows only round(1.8 c + 32) for whole c, and the reading filter drops the numbers it cannot show.
     current() {
-      if (fake.curving) return fake.startVal + Math.round(fake.rate * Math.floor((Date.now() - fake.t0) / 1000 + fake.phase));
-      return fake.value;
+      const valid = (f) => Math.round(1.8 * Math.round((f - 32) / 1.8) + 32) === f;
+      const snap = (v) => { for (let d = 0; d < 5; d++) { if (valid(v + d)) return v + d; if (valid(v - d)) return v - d; } return v; };
+      if (fake.curving) return snap(fake.startVal + Math.round(fake.rate * Math.floor((Date.now() - fake.t0) / 1000 + fake.phase)));
+      return snap(fake.value);
     },
     kill(fireEnded) {
       for (const s of fake.streams) for (const t of s.getTracks()) { if (t.readyState === 'live') { t.stop(); if (fireEnded) t.dispatchEvent(new Event('ended')); } }
@@ -252,7 +255,7 @@ async function iosClocks(browser, base, finish) {
     assert.equal(d.stalls, 0);
     assert.equal(await t.page.evaluate(() => window.__fake.calls), 1);
     assert.equal(d.delivery, expectDelivery);
-    assert.ok(d.framesPerSecond >= 3 && d.framesPerSecond <= 4.3, `${d.framesPerSecond} pictures a second`);
+    assert.ok(d.framesPerSecond >= 6 && d.framesPerSecond <= 8.5, `${d.framesPerSecond} pictures a second`);
     assert.match(await text(t.page, '#cam-status'), /Reading 77/);
     assert.equal(await t.page.locator('#start-btn').isDisabled(), false, 'Start is enabled');
     if (variant === 'zero') {

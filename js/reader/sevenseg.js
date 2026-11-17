@@ -308,7 +308,7 @@ const VIS_ON = 0.5, VIS_OFF = 0.9; // share of a segment's window that must show
 // they give the local background level right next to each segment, whatever a glare patch is doing to the picture there.
 const HOLLOW_U = [-0.60, -0.34, 0.22, 0.38], HOLLOW_L = [-0.60, -0.34, 0.62, 0.78];
 const SEG_HOLLOW = [[0], [0], [1], [1], [1], [0], [0, 1]]; // which hollow(s) border segment a..g (0 upper, 1 lower)
-const TENT_CONTRAST = 0.2; // tentative tier: possibly lit from this share of the expected contrast up
+const TENT_CONTRAST = 0.14; // tentative tier: possibly lit from this share of the expected contrast up
 const ON_CONTRAST = 0.62, ON_CONTRAST_VEILED = 0.5, OFF_CONTRAST = 0.1; // lit: dark by at least this share of the contrast a lit segment should show here; unlit: at most
 const NEIGHBOUR_T = 0.3; // ink this dark (relative to the lit segments) right of the ones cell means a digit was left out
 const ON_LOOSE = 0.5; // registration only: a segment counts as lit above this
@@ -643,6 +643,8 @@ function classify(pl, g, ev) {
 
 // Two attempts: the normal one (digits fill most of the crop), then a finer one for loosely drawn boxes (digits less than
 // half the crop height), which are too small at the normal working size.
+const MAX_HINT_SKIPS = 4; // frames in a row that may fail on segment states alone without a new search for the digits
+const SEGMENT_TROUBLE = /ambiguous segment|washed out|mid-fade/;
 const ATTEMPTS = [{ workHeight: 72, hminFrac: 0.4 }, { workHeight: 128, hminFrac: 0.26 }];
 
 export function readDisplay(img, opts = {}) {
@@ -659,7 +661,7 @@ export function readDisplay(img, opts = {}) {
     if (r.debug.reason === 'low contrast') break;
     // the finer pass is for loosely drawn boxes: only when the digits were not found, or found small relative to the crop
     const g = r.debug.geometry;
-    if (g && g.H >= 0.55 * r.debug.h && /glare|fade|contrast/.test(r.debug.reason || '')) break; // a finer look cannot fix glare, a fade or low contrast
+    if (g && g.H >= 0.55 * r.debug.h && /glare|fade|contrast|ambiguous/.test(r.debug.reason || '')) break; // a finer look cannot fix glare, a fade, an ambiguous segment or low contrast
   }
   res.debug.ms = typeof performance !== 'undefined' ? performance.now() - t0 : 0;
   return res;
@@ -671,15 +673,18 @@ function readAt(img, o) {
   if (pre.contrast < 0.2 || pre.inkFrac < 0.005) return none('low contrast', base);
   const planes = buildPlanes(pre.thick, pre.w, pre.h, THETAS_DEG);
 
-  let best = null, usedHint = false, picked = [];
+  let best = null, usedHint = false, skipped = false, picked = [];
   let res = null;
   const hint = o.hint;
   if (hint && hint.w === pre.w && hint.h === pre.h && hint.geometry && planes[hint.geometry.pi]) {
     best = refine(planes, hint.geometry);
     res = decodeAt(planes, best, base, pre, hint.ink);
     usedHint = true;
+    // A frame that fails only on the state of single segments (a change in progress, a veil) is no reason to look for the digits
+    // again: they have not moved. A few such frames in a row are tolerated, then the full search runs after all.
+    if (res.status === 'none' && (hint.skips || 0) < MAX_HINT_SKIPS && SEGMENT_TROUBLE.test(res.debug.reason || '')) skipped = true;
   }
-  if (!res || res.status === 'none') {
+  if (!skipped && (!res || res.status === 'none')) {
     const f = findGeometry(planes, pre.h, o);
     picked = f.picked;
     if (f.best) {
@@ -693,7 +698,10 @@ function readAt(img, o) {
   }
   res.debug.usedHint = usedHint;
   res.debug.picked = picked;
-  res.debug.hintOut = best && (res.status !== 'none' || res.debug.tentative) ? { w: pre.w, h: pre.h, geometry: { pi: best.pi, xr0: best.xr0, y0: best.y0, H: best.H, rho: best.rho }, ink: res.debug.inkLevel } : null;
+  res.debug.hintSkipped = skipped;
+  res.debug.hintOut = best && (res.status !== 'none' || res.debug.tentative || skipped)
+    ? { w: pre.w, h: pre.h, geometry: { pi: best.pi, xr0: best.xr0, y0: best.y0, H: best.H, rho: best.rho }, ink: skipped ? hint.ink : res.debug.inkLevel, skips: skipped ? (hint.skips || 0) + 1 : 0 }
+    : null;
   return res;
 }
 

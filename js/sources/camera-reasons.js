@@ -11,6 +11,7 @@ const MISSES = [
   { match: /cut off at the edge/, label: 'digit cut off', text: 'A digit is cut off at the edge of the box.', hint: 'Make the box bigger, with room on the left for a third digit.' },
   { match: /washed out by glare/, label: 'glare', text: 'Glare is hiding part of a digit.', hint: 'Tilt the thermometer or the phone a little, or shade the display.' },
   { match: /^low contrast/, label: 'too faint', text: 'The digits are too faint.', hint: 'Add light or reduce glare.' },
+  { match: /^unconfirmed reading/, label: 'unsteady digit', text: 'A segment of the number is changing or flickering from picture to picture.', hint: 'Check for a moving reflection on the display; hold the phone steady.' },
   { match: /^(ambiguous segment|segments mid-fade|invalid pattern|bad hundreds digit)/, label: 'unclear digit', text: 'Part of a digit is unclear.', hint: 'Check for glare, focus and that the phone is square-on.' },
   { match: /^(no digit found|too few digits|ones digit blank|gap in digits)/, label: 'no digits found', text: 'No digits found in the box.', hint: 'Move the box over the top-right number.' },
   { match: /^ink right of the ones digit/, label: 'ink beside number', text: 'Something is inside the box to the right of the number.', hint: 'Leave out the °F.' },
@@ -33,6 +34,7 @@ export function explainRejection(o) {
   if (!o) return null;
   if (o.kind === 'range') return { label: 'out of range', text: `The reading ${o.value} is outside the accepted range.` };
   if (o.kind === 'jump') return { label: 'jump too big', text: `The reading jumped from ${o.last} to ${o.value}, too big a jump, so it was not accepted.` };
+  if (o.kind === 'impossible') return { label: 'impossible number', text: `The reader saw ${o.value}, a number the thermometer cannot show (it reads whole °C, shown in °F), so it was not counted.` };
   if (o.kind === 'disagree') return { label: 'frames disagreed', text: `The pictures in this second disagreed (${(o.values || []).join(', ')}).` };
   return null;
 }

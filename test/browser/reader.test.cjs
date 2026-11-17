@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Browser tests for the digit reader (milestone 1). Drives the pre-installed global Playwright Chromium against a local static server.
 //
-//   node test/browser/reader.test.cjs [--full] [--shots DIR] [--skip-pages | --only-pages]
+//   node test/browser/reader.test.cjs [--full] [--shots DIR] [--skip-pages | --only-pages] [--only=4b,5]
 //
 // Sections
 //   1. real crops cut from test/fixtures/photos/tp17-077-set425.jpg (must all read correctly)
 //   2. the same photo with the crop box jittered +-10% (never wrong; correct rate reported)
 //   3. synthetic displays at four distortion levels (zero wrong; correct rate at mild)
-//   4. synthetic transition frames (a segment mid-fade)
+//   4. synthetic transition frames (a segment mid-fade); 4b. changes with the LCD's measured dynamics through the time confirmation
 //   5. a synthetic 60 s climb at 4 fps through filter.js (the spec's accuracy target)
 //   6. phone-camera conditions on synthetic displays; 7. the same on the real crops; 8. a 60 s climb with drifting exposure and glare
 //   9. the test page itself on a phone-sized viewport: photos, recorded video, live fake camera + soak test
@@ -19,7 +19,9 @@ const { ROOT, startServer, launch } = require('./lib.cjs');
 
 const args = process.argv.slice(2);
 const FULL = args.includes('--full');
-const SKIP_PAGES = args.includes('--skip-pages');
+const SKIP_PAGES = args.includes('--skip-pages') || args.some(a => a.startsWith('--only='));
+const onlyArg = (args.find(a => a.startsWith('--only=')) || '').slice(7);
+const want = id => !onlyArg || onlyArg.split(',').includes(id);   // --only=4b,5 runs just those sections
 const ONLY_PAGES = args.includes('--only-pages');
 const shotsIdx = args.indexOf('--shots');
 const SHOTS = shotsIdx >= 0 ? args[shotsIdx + 1] : null;
@@ -40,7 +42,7 @@ async function main() {
 
     if (!ONLY_PAGES) {
       // ---------------- 1. real crops ----------------
-      {
+      if (want('1')) {
         const files = fs.readdirSync(path.join(ROOT, 'test/fixtures/crops')).filter(f => f.endsWith('.png')).sort();
         const out = await page.evaluate(async files => {
           const S = await import('../../js/reader/sevenseg.js');
@@ -66,7 +68,7 @@ async function main() {
       }
 
       // ---------------- 2. real photo, jittered boxes ----------------
-      {
+      if (want('2')) {
         const N = FULL ? 400 : 150;
         const out = await page.evaluate(async N => {
           const S = await import('../../js/reader/sevenseg.js'), C = await import('../../js/reader/camera.js'), R = await import('../../tools/synth-display.js');
@@ -111,7 +113,7 @@ async function main() {
       }
 
       // ---------------- 3. synthetic displays ----------------
-      {
+      if (want('3')) {
         const per = FULL ? { clean: 2, mild: 3, moderate: 3, severe: 1 } : { clean: 1, mild: 1, moderate: 1, severe: 1 };
         const out = await page.evaluate(async per => {
           const S = await import('../../js/reader/sevenseg.js'), R = await import('../../tools/synth-display.js');
@@ -121,7 +123,7 @@ async function main() {
           const out = { levels: {}, confusions: {}, buckets: {}, ms: 0, n: 0 };
           const bucket = (name, v, edges) => { let k = edges.findIndex(e => v < e); if (k < 0) k = edges.length; return name + ' ' + (k ? edges[k - 1] : '<' + edges[0]) + (k < edges.length ? '-' + edges[k] : '+'); };
           for (const level of ['clean', 'mild', 'moderate', 'severe']) {
-            const L = out.levels[level] = { n: 0, ok: 0, wrong: 0, none: 0, why: {}, ones: { n: 0, ok: 0 }, dashes: { n: 0, ok: 0 } };
+            const L = out.levels[level] = { n: 0, ok: 0, wrong: 0, none: 0, tent: 0, tentWrong: 0, why: {}, ones: { n: 0, ok: 0 }, dashes: { n: 0, ok: 0 } };
             for (let rep = 0; rep < per[level]; rep++) {
               const list = [...all.map(v => [v, 1]), ...specials.map(v => [v, 4]), ['---', 30]].flatMap(([v, k]) => Array(k).fill(v));
               const use = level === 'severe' ? list.filter(() => rng() < 0.4) : level === 'clean' ? list.filter(() => rng() < 0.5) : list;
@@ -134,7 +136,7 @@ async function main() {
                 L.n++;
                 const hasOne = text.includes('1');
                 if (text === '---') L.dashes.n++; else if (hasOne) L.ones.n++;
-                if (got === null) { L.none++; const k = r.debug.reason; L.why[k] = (L.why[k] || 0) + 1; }
+                if (got === null) { L.none++; const k = r.debug.reason; L.why[k] = (L.why[k] || 0) + 1; const tv = r.debug.tentative; if (tv) { L.tent++; if (String(tv.value) !== exp) L.tentWrong++; } }
                 else if (got === exp) { L.ok++; if (text === '---') L.dashes.ok++; else if (hasOne) L.ones.ok++; }
                 else { L.wrong++; const k = exp + '->' + got; out.confusions[level + ' ' + k] = (out.confusions[level + ' ' + k] || 0) + 1; }
                 if (level === 'moderate' || level === 'severe') {
@@ -158,6 +160,8 @@ async function main() {
         if (Object.keys(out.confusions).length) console.log('      confusions:', JSON.stringify(out.confusions));
         const bk = Object.entries(out.buckets).filter(([, b]) => b.n >= 30).sort().map(([k, b]) => `${k}: ${pct(b.miss, b.n)} missed`);
         console.log('      where moderate/severe frames are missed (share of frames missed per bucket):\n        ' + bk.join('\n        '));
+        const tentTot = ['clean', 'mild', 'moderate', 'severe'].reduce((a, lv) => [a[0] + out.levels[lv].tent, a[1] + out.levels[lv].tentWrong], [0, 0]);
+        check(tentTot[1] === 0, 'synthetic displays: no tentative reading (the candidate time confirmation would accept) differs from what is shown', `${tentTot[1]} wrong of ${tentTot[0]} tentative`);
         for (const lv of ['clean', 'mild', 'moderate']) check(out.levels[lv].wrong === 0, `synthetic ${lv}: zero wrong reads`, `${out.levels[lv].wrong} wrong of ${out.levels[lv].n}`);
         check(out.levels.severe.wrong === 0, 'synthetic severe: zero wrong reads (reported, not required by the brief)', `${out.levels.severe.wrong} wrong of ${out.levels.severe.n}`);
         check(out.levels.clean.ok / out.levels.clean.n >= 0.99, 'synthetic clean: at least 99% correct', pct(out.levels.clean.ok, out.levels.clean.n));
@@ -167,7 +171,7 @@ async function main() {
       }
 
       // ---------------- 4. transition frames ----------------
-      {
+      if (want('4')) {
         const out = await page.evaluate(async FULL => {
           const S = await import('../../js/reader/sevenseg.js'), R = await import('../../tools/synth-display.js');
           const rng = R.mulberry32(4242);
@@ -194,10 +198,57 @@ async function main() {
         results.transitions = out;
       }
 
+
+      // ---------------- 4b. changes with the LCD's measured dynamics, through the time confirmation ----------------
+      if (want('4b')) {
+        const out = await page.evaluate(async FULL => {
+          const S = await import('../../js/reader/sevenseg.js'), R = await import('../../tools/synth-display.js'), C = await import('../../js/reader/confirm.js');
+          const rng = R.mulberry32(5150);
+          const pairs = [['99', '100'], ['199', '200'], ['109', '110'], ['119', '120'], ['89', '90'], ['77', '78'], ['111', '112'], ['168', '169'], ['256', '257'], ['300', '301'], ['499', '500'], ['58', '59'], ['40', '41'], ['157', '158'], ['316', '317'], ['188', '189'], ['569', '570'], ['400', '399'], ['270', '264'], ['381', '376'], ['177', '171'], ['141', '147']];
+          const res = {};
+          for (const level of ['mild', 'moderate']) {
+            const r = res[level] = { frames: 0, ok: 0, wrong: 0, confirmed: 0, tentative: 0, settled: 0, settledOk: 0, wrongs: [], runs: 0, runsAllRead: 0 };
+            const runs = FULL ? 280 : 140;
+            for (let i = 0; i < runs; i++) {
+              const [a, b] = pairs[i % pairs.length];
+              const p0 = R.randomParams(rng, b, level, { margin: 0.1, digitH: 140 });
+              const gap = [33, 67, 100, 133, 133, 200, 267][i % 7];  // pictures 33 ms .. 267 ms apart: 7.5 fps, a slow phone, and the 30 fps of a video
+              const t0 = -Math.floor(rng() * gap) - gap;            // the change begins at 0; pictures at t0, t0 + gap ...
+              const conf = C.createConfirmer();
+              let hint = null; r.runs++; let allRead = true;
+              for (let t = t0; t <= 650; t += gap) {
+                const p = Object.assign({}, p0, { seed: Math.floor(rng() * 1e9) });
+                if (t < 0) p.text = a; else { p.text = b; if (t < 300) p.fade = { from: a, tMs: t, jitterMs: 4 }; }
+                const raw = S.readDisplay(R.renderDisplay(p), { hint });
+                hint = raw.debug.hintOut || hint;
+                const q = conf.step(raw, 1000 + t);
+                r.frames++;
+                if (raw.debug.tentative) r.tentative++;
+                if (q.status === 'ok') {
+                  r.ok++; if (q.debug.confirmed) r.confirmed++;
+                  const v = String(q.value), allowed = t < 0 ? [a] : t <= 200 ? [a, b] : [b];   // after the change began, the old value may still be seen for 200 ms
+                  if (!allowed.includes(v)) { r.wrong++; r.wrongs.push(`${a}->${b} t=${t} gap=${gap} read ${v}`); }
+                }
+                if (t > 400) { r.settled++; if (q.status === 'ok' && String(q.value) === b) r.settledOk++; else allRead = false; }
+              }
+              if (allRead) r.runsAllRead++;
+            }
+          }
+          return res;
+        }, FULL);
+        for (const [lv, r] of Object.entries(out)) {
+          console.log(`      LCD change dynamics + confirmation, ${lv}: ${r.frames} pictures, ${r.ok} read (${r.confirmed} only by confirmation), ${r.tentative} had a tentative reading, ${r.wrong} wrong ${r.wrongs.slice(0, 5).join('; ')}; once settled (>400 ms) ${pct(r.settledOk, r.settled)} read`);
+        }
+        check(out.mild.wrong === 0 && out.moderate.wrong === 0, 'changes with the LCD dynamics (on 0.13 / 0.59 / 0.73, off 0.34 / 0.15 / 0.07, ghost tail) through the confirmation: never a value that is neither the old nor the new reading', `${out.mild.wrong} + ${out.moderate.wrong} wrong`);
+        check(out.mild.settledOk / out.mild.settled >= 0.97, 'changes with the LCD dynamics: the new value is read in at least 97% of the settled pictures at mild', pct(out.mild.settledOk, out.mild.settled));
+        results.dynamics = Object.fromEntries(Object.entries(out).map(([k, r]) => [k, `${r.wrong} wrong of ${r.frames}, ${r.confirmed} confirmed reads`]));
+      }
+
       // ---------------- 5. synthetic 60 s climb through filter.js ----------------
-      {
+      if (want('5')) {
         const out = await page.evaluate(async () => {
           const S = await import('../../js/reader/sevenseg.js'), R = await import('../../tools/synth-display.js'), F = await import('../../js/reader/filter.js');
+          const nv = v => { let b = Math.round(v); for (let d = 0; d < 5; d++) { if (F.isWholeCelsiusF(b + d)) return b + d; if (F.isWholeCelsiusF(b - d)) return b - d; } return b; }; // the display shows whole degrees C only
           const res = {};
           for (const level of ['mild', 'moderate']) {
             const rng = R.mulberry32(777 + level.length);
@@ -207,8 +258,8 @@ async function main() {
             const FPS = 4, SECS = 60;
             let truth = 84;
             for (let s = 0; s < SECS; s++) {
-              truth = Math.min(199, Math.round(84 + s * 1.9 + Math.sin(s / 4) * 0.8)); // about 114 F/min climb: 84 .. 198, crossing 99->100 near 8 s
-              const next = Math.round(84 + (s + 1) * 1.9 + Math.sin((s + 1) / 4) * 0.8);
+              truth = nv(Math.min(199, 84 + s * 1.9 + Math.sin(s / 4) * 0.8)); // about 114 F/min climb: 84 .. 198, crossing 99->100 near 8 s
+              const next = nv(84 + (s + 1) * 1.9 + Math.sin((s + 1) / 4) * 0.8);
               for (let k = 0; k < FPS; k++) {
                 // the display refreshes once a second; the last frame of a second sometimes catches the change half way
                 const mid = k === FPS - 1 && next !== truth && rng() < 0.7;
@@ -240,7 +291,7 @@ async function main() {
 
     if (!ONLY_PAGES) {
       // ---------------- 6. phone-camera conditions: exposure drift, glare, shadows, vignetting, JPEG ----------------
-      {
+      if (want('6')) {
         const k = FULL ? 2 : 1;
         const scen = [
           ['mild', 'none', 'single', 200 * k], ['moderate', 'none', 'single', 200 * k],
@@ -254,7 +305,7 @@ async function main() {
           const vals = []; for (let v = 14; v <= 572; v++) vals.push(String(v)); for (let i = 0; i < 12; i++) vals.push('---');
           const res = [];
           for (const [base, cond, kind, n] of scen) {
-            const st = { base, cond, kind, n: 0, ok: 0, wrong: 0, none: 0, why: {}, msOk: 0, nOk: 0, msNone: 0, nNone: 0, wrongs: [] };
+            const st = { base, cond, kind, n: 0, ok: 0, wrong: 0, none: 0, tent: 0, tentWrong: 0, why: {}, msOk: 0, nOk: 0, msNone: 0, nNone: 0, wrongs: [] };
             const seqLen = kind === 'seq' ? 8 : 1;
             for (let i = 0; i < n; i += seqLen) {
               const text = vals[Math.floor(rng() * vals.length)];
@@ -272,7 +323,7 @@ async function main() {
                 const e = text === '---' ? 'dashes' : text;
                 const got = r.status === 'dashes' ? 'dashes' : r.status === 'ok' ? String(r.value) : null;
                 st.n++;
-                if (got === null) { st.none++; st.msNone += ms; st.nNone++; const kk = r.debug.reason; st.why[kk] = (st.why[kk] || 0) + 1; }
+                if (got === null) { st.none++; st.msNone += ms; st.nNone++; const kk = r.debug.reason; st.why[kk] = (st.why[kk] || 0) + 1; if (r.debug.tentative) { st.tent++; if (String(r.debug.tentative.value) !== e) st.tentWrong++; } }
                 else { st.msOk += ms; st.nOk++; if (got === e) st.ok++; else { st.wrong++; if (st.wrongs.length < 5) st.wrongs.push(e + '->' + got); } }
               }
             }
@@ -288,6 +339,8 @@ async function main() {
           console.log(`      ${(st.base + ' + ' + st.cond).padEnd(22)}: ${pct(st.ok, st.n).padStart(6)} read (${st.ok}/${st.n}), ${st.wrong} wrong, ${st.none} missed; ${st.msOk} ms per read frame, ${st.msNone} ms per unread frame; missed mostly: ${top || 'n/a'}${st.wrongs.length ? '  WRONG: ' + st.wrongs.join(' ') : ''}`);
         }
         const wrongTot = out.reduce((a, st) => a + st.wrong, 0);
+        const tentWrongTot = out.reduce((a, st) => a + st.tentWrong, 0), tentTot = out.reduce((a, st) => a + st.tent, 0);
+        check(tentWrongTot === 0, 'phone-camera conditions: no tentative reading differs from what is shown (a steady wrong one would be confirmed)', `${tentWrongTot} wrong of ${tentTot} tentative`);
         check(wrongTot === 0, 'phone-camera conditions (exposure, glare, shadows, vignette, JPEG): zero wrong reads at every level', `${wrongTot} wrong of ${out.reduce((a, st) => a + st.n, 0)}`);
         const ex = byName['mild exposure'];
         check(ex.ok / ex.n >= 0.97, 'exposure drift alone (gain 0.6-1.5, gamma 0.7-1.4, colour cast, per frame): at least 97% of frames read', pct(ex.ok, ex.n));
@@ -302,7 +355,7 @@ async function main() {
       }
 
       // ---------------- 7. real crops under synthetic glare and exposure ----------------
-      {
+      if (want('7')) {
         const files = fs.readdirSync(path.join(ROOT, 'test/fixtures/crops')).filter(f => f.endsWith('.png')).sort();
         const N = FULL ? 40 : 15;
         const out = await page.evaluate(async ({ files, N }) => {
@@ -310,7 +363,7 @@ async function main() {
           const rng = R.mulberry32(1234);
           const res = {};
           for (const cond of ['exposure', 'glareLight', 'glare', 'glareHard', 'glareGone', 'lighting']) {
-            const st = res[cond] = { n: 0, ok: 0, wrong: 0, none: 0, wrongs: [] };
+            const st = res[cond] = { n: 0, ok: 0, wrong: 0, none: 0, tent: 0, tentWrong: 0, wrongs: [] };
             for (const f of files) {
               const exp = f.startsWith('v077') ? '77' : f.startsWith('v425') ? '425' : f.startsWith('v160') ? '160' : 'dashes';
               const bmp = await createImageBitmap(await (await fetch('../fixtures/crops/' + f)).blob());
@@ -325,7 +378,7 @@ async function main() {
                 const r = S.readDisplay(img);
                 const got = r.status === 'dashes' ? 'dashes' : r.status === 'ok' ? String(r.value) : null;
                 st.n++;
-                if (got === null) st.none++; else if (got === exp) st.ok++; else { st.wrong++; st.wrongs.push(f + ' ' + exp + '->' + got); }
+                if (got === null) { st.none++; if (r.debug.tentative) { st.tent++; if (String(r.debug.tentative.value) !== exp) { st.tentWrong++; st.wrongs.push(f + ' ' + exp + '=>tentative ' + r.debug.tentative.value); } } } else if (got === exp) st.ok++; else { st.wrong++; st.wrongs.push(f + ' ' + exp + '->' + got); }
               }
             }
           }
@@ -336,15 +389,18 @@ async function main() {
           wrongTot += st.wrong; nTot += st.n;
           console.log(`      real crops + ${cond.padEnd(10)}: ${pct(st.ok, st.n).padStart(6)} read (${st.ok}/${st.n}), ${st.wrong} wrong ${st.wrongs.slice(0, 5).join(' ')}`);
         }
+        const tw = Object.values(out).reduce((a, st) => a + st.tentWrong, 0), tt = Object.values(out).reduce((a, st) => a + st.tent, 0);
+        check(tw === 0, 'the real crops under synthetic glare, exposure drift and lighting: no tentative reading differs from what is shown', `${tw} wrong of ${tt} tentative`);
         check(wrongTot === 0, 'the real crops under synthetic glare, exposure drift and lighting: zero wrong reads', `${wrongTot} wrong of ${nTot}`);
         check(out.exposure.ok / out.exposure.n >= 0.9, 'the real crops under exposure drift: at least 90% read (the brightest part of the real LCD saturates at gain 1.5)', pct(out.exposure.ok, out.exposure.n));
         results.realConditions = Object.fromEntries(Object.entries(out).map(([k, st]) => [k, `${pct(st.ok, st.n)} read, ${st.wrong} wrong`]));
       }
 
       // ---------------- 8. 60 s climb with drifting exposure and a static partial-glare patch ----------------
-      {
+      if (want('8')) {
         const out = await page.evaluate(async () => {
           const S = await import('../../js/reader/sevenseg.js'), R = await import('../../tools/synth-display.js'), F = await import('../../js/reader/filter.js');
+          const nv = v => { let b = Math.round(v); for (let d = 0; d < 5; d++) { if (F.isWholeCelsiusF(b + d)) return b + d; if (F.isWholeCelsiusF(b - d)) return b - d; } return b; }; // the display shows whole degrees C only
           const res = {};
           for (const variant of ['exposure only', 'exposure + 25% glare patch at 35% of the width', 'exposure + 25% glare patch at 45% of the width', 'exposure + 25% glare patch at 55% of the width', 'exposure + 40% glare patch at 35% of the width', 'exposure + 40% glare patch at 55% of the width']) {
             const rng = R.mulberry32(99 + variant.length);
@@ -357,8 +413,8 @@ async function main() {
             let hint = null, exp = null, correct = 0, wrong = 0, missed = 0, frames = 0, framesRead = 0;
             const rows = [];
             for (let s = 0; s < 60; s++) {
-              const truth = Math.min(199, Math.round(84 + s * 1.9 + Math.sin(s / 4) * 0.8));
-              const next = Math.round(84 + (s + 1) * 1.9 + Math.sin((s + 1) / 4) * 0.8);
+              const truth = nv(Math.min(199, 84 + s * 1.9 + Math.sin(s / 4) * 0.8));
+              const next = nv(84 + (s + 1) * 1.9 + Math.sin((s + 1) / 4) * 0.8);
               for (let k = 0; k < 4; k++) {
                 const mid = k === 3 && next !== truth && rng() < 0.7;
                 const p = Object.assign({}, base, { text: mid ? String(next) : String(truth), seed: Math.floor(rng() * 1e9) });
@@ -522,9 +578,11 @@ async function makeSyntheticVideo(browser, base) {
     const rng = R.mulberry32(31337);
     const base = R.randomParams(rng, '90', 'mild', { margin: 0.1, jitter: 0, digitH: 150, extras: { degF: false, label: false, rule: false } });
     Object.assign(base, { w: 640, h: 360, H: 150, xr: 560, y0: 105, rotation: 0.5 });
+    const valid = f => Math.round(1.8 * Math.round((f - 32) / 1.8) + 32) === f; // the display shows whole degrees C only
+    const nv = x => { const b = Math.round(x); for (let d = 0; d < 5; d++) { if (valid(b + d)) return b + d; if (valid(b - d)) return b - d; } return b; };
     const truth = [], frames = [];
     for (let f = 0; f < SECS * FPS; f++) {
-      const t = f / FPS, v = Math.round(92 + t * 1.6); // 92 .. 111: crosses 99 -> 100 near 4.4 s
+      const t = f / FPS, v = nv(92 + t * 1.6); // 92 .. 111: crosses 99 -> 100 near 4.4 s
       if (f % FPS === 0) truth.push(v);
       const p = Object.assign({}, base, { text: String(v), seed: f * 7 + 1 });
       const img = R.renderDisplay(p);

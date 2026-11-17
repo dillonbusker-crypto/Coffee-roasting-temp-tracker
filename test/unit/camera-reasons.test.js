@@ -10,6 +10,7 @@ test('every reason the reader gives maps to a plain label, text and hint', () =>
     ['low contrast', 'too faint', 'The digits are too faint.', 'Add light or reduce glare.'],
     ['ambiguous segment', 'unclear digit', 'Part of a digit is unclear.', 'Check for glare, focus and that the phone is square-on.'],
     ['segments mid-fade', 'unclear digit'],
+    ['unconfirmed reading', 'unsteady digit', 'A segment of the number is changing or flickering from picture to picture.', 'Check for a moving reflection on the display; hold the phone steady.'],
     ['invalid pattern', 'unclear digit'],
     ['bad hundreds digit', 'unclear digit'],
     ['no digit found', 'no digits found', 'No digits found in the box.'],
@@ -35,6 +36,9 @@ test('filter outcomes: range, jump and disagreement are named; reads and gaps ar
   assert.equal(explainRejection({ kind: 'jump', value: 300, last: 100 }).text, 'The reading jumped from 100 to 300, too big a jump, so it was not accepted.');
   assert.equal(explainRejection({ kind: 'range', value: 20 }).label, 'out of range');
   assert.match(explainRejection({ kind: 'disagree', values: [60, 90] }).text, /60, 90/);
+  const imp = explainRejection({ kind: 'impossible', value: 254 });
+  assert.equal(imp.label, 'impossible number');   // the same label as the reader's own "number the thermometer cannot show"
+  assert.match(imp.text, /254/);
   assert.equal(explainRejection({ kind: 'read', value: 80 }), null);
   assert.equal(explainRejection({ kind: 'missing' }), null);
   assert.equal(explainRejection(null), null);

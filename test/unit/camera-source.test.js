@@ -78,7 +78,7 @@ test('two start() calls at once open the camera once', async () => {
   assert.equal(w.source.state, 'live');
 });
 
-test('sample() closes a second: median of its frames, then frames are not reused', async () => {
+test('sample() closes a second: the value its frames agree on, then frames are not reused', async () => {
   const w = world();
   await w.source.start();
   w.feed(77, 1);
@@ -93,8 +93,8 @@ test('sample() closes a second: median of its frames, then frames are not reused
 test('a second with disagreeing or unreadable frames is a gap; a bad jump is rejected and counted', async () => {
   const w = world();
   await w.source.start();
-  w.feed(80, 1);
-  assert.equal(w.source.sample(0), 80);
+  w.feed(81, 1);
+  assert.equal(w.source.sample(0), 81);
   w.feed(null, 1, 'none');
   assert.equal(w.source.sample(1), null);
   w.feed(200, 1);                                // 120 degrees in 2 seconds
@@ -115,8 +115,8 @@ test('a missed tick is a gap, counts as missing and never reuses stale frames', 
   assert.equal(w.source.sample(3, { missed: true }), null);
   // the last tick of the batch is not flagged, but the frames from before the stall are too old to use
   assert.equal(w.source.sample(4, { missed: false }), null);
-  w.feed(112, 1);
-  assert.equal(w.source.sample(5), 112);
+  w.feed(113, 1);
+  assert.equal(w.source.sample(5), 113);
   const h = w.source.health();
   assert.equal(h.secondsRead, 2);
   assert.equal(h.secondsMissing, 4);
@@ -176,9 +176,9 @@ test('starting the roast resets the filter and the health counters; the stream s
   await w.source.start();                        // the roast controller
   assert.deepEqual(w.source.health().secondsRead + w.source.health().secondsMissing + w.source.health().rejected, 0);
   assert.equal(w.cam.starts, 1);
-  // the old anchor (300) is gone: 80 is accepted as the first value
-  w.feed(80, 1);
-  assert.equal(w.source.sample(0), 80);
+  // the old anchor (300) is gone: 81 is accepted as the first value
+  w.feed(81, 1);
+  assert.equal(w.source.sample(0), 81);
 });
 
 test('frames from the last second before Start count for second 0', async () => {
@@ -192,8 +192,8 @@ test('frames from the last second before Start count for second 0', async () => 
 test('reanchor() hands a typed reading to the filter', async () => {
   const w = world();
   await w.source.start();
-  w.feed(80, 1);
-  assert.equal(w.source.sample(0), 80);
+  w.feed(81, 1);
+  assert.equal(w.source.sample(0), 81);
   w.source.reanchor(200);                        // the user typed 200
   w.feed(82, 1);
   assert.equal(w.source.sample(1), null);        // 82 is now a 118 degree jump from what the filter trusts
@@ -298,8 +298,8 @@ test('a dead track is reported, gaps are logged meanwhile, and the stream comes 
   // restart() ran: the fake camera opened a new stream
   assert.equal(w.cam.starts, 2);
   assert.equal(w.source.state, 'live');
-  w.feed(123, 1);
-  assert.equal(w.source.sample(1), 123);
+  w.feed(124, 1);
+  assert.equal(w.source.sample(1), 124);
 });
 
 test('while the camera cannot come back, state says so and sample() yields gaps', async () => {
@@ -484,7 +484,7 @@ test('diagnostics() separates the cost of readable and unreadable pictures and c
   const w = slowWorld((img) => (img.status === 'none' ? 40 : 6));
   await w.source.start();
   w.source.onFrame(() => {});
-  for (let i = 0; i < 8; i++) { w.advance(1000); w.cam.frame(i % 2 ? { status: 'none', value: null } : { status: 'ok', value: 80 }); w.flush(); }
+  for (let i = 0; i < 8; i++) { w.advance(1000); w.cam.frame(i % 2 ? { status: 'none', value: null } : { status: 'ok', value: 81 }); w.flush(); }
   const d = w.source.diagnostics();
   assert.equal(Math.round(d.readMsAvgReadable), 6);
   assert.equal(Math.round(d.readMsAvgUnreadable), 40);
@@ -510,13 +510,13 @@ test('a second with no reading is tallied under its most common reason, and the 
   assert.equal(w.source.sample(2), null);
   w.advance(250); w.cam.frame(miss('digit cut off at the right edge of the crop'));
   w.source.sample(3);
-  w.feed(80, 1);
-  assert.equal(w.source.sample(4), 80);
+  w.feed(81, 1);
+  assert.equal(w.source.sample(4), 81);
   assert.deepEqual(w.source.health().missReasons, { 'unclear digit': 1, 'no probe': 1, 'no picture': 1, 'digit cut off': 1 });
   const d = w.source.diagnostics();
   assert.equal(d.tallyRead, 1);
   assert.equal(d.tally['unclear digit'], 1);
-  assert.deepEqual(d.lastOutcomes, ['unclear digit', 'dashes', 'no picture', 'digit cut off', '80']);
+  assert.deepEqual(d.lastOutcomes, ['unclear digit', 'dashes', 'no picture', 'digit cut off', '81']);
   // a fresh roast starts the tally again
   await w.source.start();
   assert.deepEqual(w.source.health().missReasons, {});
@@ -528,12 +528,12 @@ test('filter rejections are named with both values: out of range, jump too big, 
   await w.source.start();
   w.feed(100, 1); assert.equal(w.source.sample(0), 100);
   w.feed(300, 1); assert.equal(w.source.sample(1), null);
-  w.advance(1000); for (const v of [20, 20, 20, 20]) { w.advance(250); w.cam.frame({ status: 'ok', value: v, debug: {} }); }
+  w.advance(1000); for (const v of [46, 46, 46, 46]) { w.advance(250); w.cam.frame({ status: 'ok', value: v, debug: {} }); }
   assert.equal(w.source.sample(2), null);
-  w.advance(1000); for (const v of [100, 130, 100, 130]) { w.advance(250); w.cam.frame({ status: 'ok', value: v, debug: {} }); }
+  w.advance(1000); for (const v of [100, 129, 100, 129]) { w.advance(250); w.cam.frame({ status: 'ok', value: v, debug: {} }); }
   assert.equal(w.source.sample(3), null);
   const d = w.source.diagnostics();
-  assert.deepEqual(d.lastOutcomes, ['100', 'jump too big (100 to 300)', 'out of range (20)', 'frames disagreed']);
+  assert.deepEqual(d.lastOutcomes, ['100', 'jump too big (100 to 300)', 'out of range (46)', 'frames disagreed']);
   assert.deepEqual(w.source.health().missReasons, { 'jump too big': 1, 'out of range': 1, 'frames disagreed': 1 });
 });
 
@@ -574,7 +574,7 @@ test('the newest readable and unreadable pictures are kept exactly as the reader
   await w.source.start();
   const ok1 = { status: 'ok', value: 77, digits: '77', width: 100, height: 40, debug: { scale: 2, geometry: { H: 60 } } };
   const miss1 = miss('ambiguous segment', { digits: '7?' });
-  const ok2 = { status: 'ok', value: 80, digits: '80', width: 120, height: 48, debug: { scale: 2, geometry: { H: 80 } } };
+  const ok2 = { status: 'ok', value: 81, digits: '81', width: 120, height: 48, debug: { scale: 2, geometry: { H: 80 } } };
   w.advance(250); w.cam.frame(ok1);
   w.advance(250); w.cam.frame(miss1);
   let c = w.source.captured();
@@ -588,7 +588,60 @@ test('the newest readable and unreadable pictures are kept exactly as the reader
   assert.equal(c.miss.imageData, miss1, 'the unreadable one stays until a newer miss');
   const d = w.source.diagnostics();
   assert.deepEqual([d.cropW, d.cropH, d.digitH], [120, 48, 40]);
-  assert.equal(d.lastOkValue, 80);
+  assert.equal(d.lastOkValue, 81);
   assert.equal(d.capturedMiss.reason, 'ambiguous segment');
   assert.equal(d.capturedOk.w, 120);
+});
+
+// ---- time confirmation of tentative readings (reader/confirm.js) and the observed-value rule ----
+
+const seg = (v) => ({ masks: [0, 7, 7], c: [Array(7).fill(0.02), [v, v, v, 0, 0, 0, 0], [v, v, v, 0, 0, 0, 0]] });
+const veiledFrame = (v, value = 77) => ({ status: 'none', value: null, digits: [], confidence: 0,
+  debug: { reason: 'ambiguous segment', seg7: seg(v), tentative: { value, digits: [null, 7, 7], confidence: 0.6 } } });
+
+test('a veiled reading that holds still is accepted from the second picture on; a lone one is not', async () => {
+  const w = world();
+  await w.source.start();
+  w.advance(250); w.cam.frame(veiledFrame(0.40));
+  assert.equal(w.source.sample(0), null, 'one tentative picture is not a reading');
+  assert.equal(w.source.diagnostics().lastOutcomes.pop(), 'unsteady digit');
+  for (const v of [0.41, 0.40, 0.42, 0.41]) { w.advance(250); w.cam.frame(veiledFrame(v)); }
+  assert.equal(w.source.sample(1), 77);
+});
+
+test('a veil that is moving, or a segment changing, never becomes a value', async () => {
+  const w = world();
+  await w.source.start();
+  for (const v of [0.25, 0.45, 0.65, 0.4]) { w.advance(250); w.cam.frame(veiledFrame(v)); }
+  assert.equal(w.source.sample(0), null);
+  assert.equal(w.source.health().secondsRead, 0);
+});
+
+test('the pictures after a box change are not confirmed against pictures of the old box', async () => {
+  const w = world();
+  await w.source.start();
+  w.advance(250); w.cam.frame(veiledFrame(0.40));
+  w.source.setBox({ x: 0.1, y: 0.1, w: 0.3, h: 0.15 });
+  w.advance(250); w.cam.frame(veiledFrame(0.40));
+  assert.equal(w.source.sample(0), null);
+});
+
+test('a number the thermometer cannot show is not a reading and is named as such', async () => {
+  const w = world();
+  await w.source.start();
+  await w.source.start();
+  w.feed(254, 1);                                  // 254 is not round(1.8 c + 32) for a whole c
+  assert.equal(w.source.sample(0), null);
+  const d = w.source.diagnostics();
+  assert.deepEqual(d.lastOutcomes, ['impossible number']);
+  assert.deepEqual(w.source.health().missReasons, { 'impossible number': 1 });
+  w.feed(253, 1);
+  assert.equal(w.source.sample(1), 253);
+});
+
+test('peek() shows a value that was actually seen, never an average of two', async () => {
+  const w = world();
+  await w.source.start();
+  for (const v of [253, 255, 253, 255]) { w.advance(250); w.cam.frame({ status: 'ok', value: v }); }
+  assert.equal(w.source.peek().value, 255, 'level: the later one, not 254');
 });

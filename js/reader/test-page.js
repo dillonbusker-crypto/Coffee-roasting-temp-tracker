@@ -1,10 +1,11 @@
 // reader-test.html: milestone 1 test page for the digit reader (photos, recorded video, live camera + soak test).
 import { readDisplay } from './sevenseg.js';
 import { createReadingFilter } from './filter.js';
+import { createConfirmer } from './confirm.js';
 import { createCamera, createFrameLoop, grabCropFrom, expandBoxForDigits, clampBox } from './camera.js';
 
 const $ = id => document.getElementById(id);
-const FPS = 4;
+const FPS = 7.5; // as the app: a reflected segment is confirmed from two pictures 133 ms apart (confirm.js)
 const DEFAULT_BOX = { x: 0.08, y: 0.08, w: 0.25, h: 0.1 };
 
 // ---------- small helpers ----------
@@ -321,8 +322,8 @@ function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;
 // VIDEO
 // ============================================================
 const vid = $('video-el');
-const videoStage = new BoxStage($('video-stage'), () => { video.hint = null; if (!video.running) readVideoOnce(); });
-const video = { url: null, running: false, loop: null, tiles: [], filter: null, curSec: -1, secFrames: [], work: {}, hint: null, misses: 0, wrong: new Set() };
+const videoStage = new BoxStage($('video-stage'), () => { video.hint = null; video.confirmer.reset(); if (!video.running) readVideoOnce(); });
+const video = { url: null, running: false, loop: null, tiles: [], filter: null, confirmer: createConfirmer(), curSec: -1, secFrames: [], work: {}, hint: null, misses: 0, wrong: new Set() };
 
 $('video-file').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
@@ -359,7 +360,7 @@ $('video-stop').addEventListener('click', () => { finishVideo(false); });
 
 $('video-process').addEventListener('click', async () => {
   if (video.running) return;
-  video.running = true; video.filter = createReadingFilter(); video.curSec = -1; video.secFrames = []; video.tiles = []; video.hint = null; video.wrong.clear();
+  video.running = true; video.filter = createReadingFilter(); video.confirmer.reset(); video.curSec = -1; video.secFrames = []; video.tiles = []; video.hint = null; video.wrong.clear();
   $('video-tiles').textContent = ''; $('video-summary').hidden = false; $('video-progress').hidden = false;
   $('video-process').disabled = true; $('video-stop').disabled = false;
   updateVideoSummary();
@@ -376,8 +377,10 @@ function onVideoFrame(t) {
   const sec = Math.floor(t + 1e-6);
   if (video.curSec < 0) video.curSec = sec;
   while (video.curSec < sec) closeVideoSecond(); // a skipped second closes as missing
-  const { imageData, res } = readBox(vid, vid.videoWidth, vid.videoHeight, videoStage.box, video.work, video.hint);
-  nextHint(video, res);
+  const read = readBox(vid, vid.videoWidth, vid.videoHeight, videoStage.box, video.work, video.hint);
+  const imageData = read.imageData;
+  nextHint(video, read.res);
+  const res = video.confirmer.step(read.res, t * 1000);
   video.filter.addFrame(res);
   video.secFrames.push({ res, imageData });
   showResult('video', res);
@@ -444,8 +447,8 @@ function updateVideoSummary(final) {
 // ============================================================
 let liveCam = null;
 const liveVideo = $('live-video');
-const liveStage = new BoxStage($('live-stage'), b => { if (liveCam) liveCam.setBox(b); live.hint = null; });
-const live = { hint: null, misses: 0 };
+const liveStage = new BoxStage($('live-stage'), b => { if (liveCam) liveCam.setBox(b); live.hint = null; live.confirmer.reset(); });
+const live = { hint: null, misses: 0, confirmer: createConfirmer() };
 
 $('live-start').addEventListener('click', async () => {
   if (liveCam) return;
@@ -486,8 +489,9 @@ function updateLiveCamInfo() {
 
 let lastLiveDraw = 0;
 function onLiveFrame(imageData) {
-  const res = readDisplay(imageData, { hint: live.hint });
-  nextHint(live, res);
+  const raw = readDisplay(imageData, { hint: live.hint });
+  nextHint(live, raw);
+  const res = live.confirmer.step(raw, performance.now());
   if (soak.running) soak.filter.addFrame(res);
   const now = performance.now();
   showResult('live', res);

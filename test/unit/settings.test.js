@@ -45,7 +45,7 @@ test('defaults carry every spec target', () => {
   assert.equal(DEFAULTS.replayUndoWindowSec, 20);
   assert.equal(DEFAULTS.fanPrompt, false);
   assert.equal(DEFAULTS.units, 'F');
-  assert.deepEqual(DEFAULTS.reader, { minF: 50, maxF: 550, maxJumpF: 15, fps: 4 });
+  assert.deepEqual(DEFAULTS.reader, { minF: 50, maxF: 550, maxJumpF: 15, fps: 7.5 });
   assert.ok(Object.values(DEFAULTS.mute).every((v) => v === false));
 });
 
@@ -56,7 +56,14 @@ test('load merges stored values over defaults, including new keys and nested obj
   assert.equal(s.mute.hot, true);
   assert.equal(s.mute.slow, false);       // default kept
   assert.equal(s.expectedFcF, 410);       // key absent from storage
-  assert.equal(s.reader.fps, 4);
+  assert.equal(s.reader.fps, 7.5);
+});
+
+test('a saved frame rate of 4 (the old default) is replaced by the new default; any other saved rate is kept', () => {
+  const load = (reader) => loadSettings(fakeStorage({ [STORAGE_KEY]: JSON.stringify({ reader }) })).reader.fps;
+  assert.equal(load({ fps: 4 }), 7.5);
+  assert.equal(load({ fps: 6 }), 6);
+  assert.equal(load({ minF: 60 }), 7.5);
 });
 
 test('save, load and reset round-trip; defaults are never mutated', () => {

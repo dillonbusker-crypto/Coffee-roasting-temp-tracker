@@ -29,15 +29,35 @@ export function cellsOf(text) {
   return c;
 }
 
-// Per-segment ink alpha for a cell, with an optional fade from another character.
-function segAlphas(ch, fromCh, p, rng, jitter) {
+// How the real LCD changes a segment, measured on the user's 15 fps cooldown video (400x170 crops, relative contrast of one
+// segment against a fully lit one, picture by picture): a segment switching on goes 0.13, 0.59, 0.73, 0.9, 1.0 in 33 ms steps; one
+// switching off goes 0.34, 0.15, 0.07, then leaves a faint ghost for up to ~200 ms. The two curves cross near 0.3, about 17 ms
+// after the change starts, which is why a picture taken in the middle of a change shows the superset of the old and new segments
+// (both the one going out and the one coming in look half lit). Times are ms since the change began.
+const ON_CURVE = [[0, 0], [17, 0.3], [33, 0.52], [50, 0.62], [83, 0.74], [117, 0.9], [160, 1]];
+const OFF_CURVE = [[0, 1], [17, 0.3], [50, 0.15], [83, 0.08], [120, 0.07], [200, 0.04], [270, 0]];
+function curveAt(curve, t) {
+  if (t <= curve[0][0]) return curve[0][1];
+  for (let i = 1; i < curve.length; i++) {
+    if (t <= curve[i][0]) { const [t0, a0] = curve[i - 1], [t1, a1] = curve[i]; return a0 + (a1 - a0) * (t - t0) / (t1 - t0); }
+  }
+  return curve[curve.length - 1][1];
+}
+/** Ink alpha (0..1) of a segment `tMs` after it started switching on (rising) or off. */
+export function changeAlpha(rising, tMs) { return curveAt(rising ? ON_CURVE : OFF_CURVE, tMs); }
+
+// Per-segment ink alpha for a cell, with an optional change from another character: fade = { from, p (linear mix, 0..1) | tMs (the
+// LCD's own dynamics, see above), jitter }.
+function segAlphas(ch, fromCh, fade, rng) {
   const out = {};
   for (const s of SEGS) {
     const now = PAT[ch].includes(s) ? 1 : 0;
     if (fromCh === undefined) { out[s] = now; continue; }
     const was = PAT[fromCh].includes(s) ? 1 : 0;
-    let a = was + (now - was) * p;
-    if (was !== now) a = Math.min(1, Math.max(0, a + (rng ? gauss(rng) * jitter : 0)));
+    if (was === now) { out[s] = now; continue; }
+    let a;
+    if (fade.tMs !== undefined) a = changeAlpha(now === 1, Math.max(0, fade.tMs + (rng ? gauss(rng) * (fade.jitterMs ?? 3) : 0)));
+    else a = Math.min(1, Math.max(0, was + (now - was) * (fade.p ?? 0) + (rng ? gauss(rng) * (fade.jitter ?? 0) : 0)));
     out[s] = a;
   }
   return out;
@@ -83,7 +103,8 @@ function drawCell(ctx, alphas, xr, y0, H, g, ink, ghost) {
 /**
  * params:
  *  w, h            crop size in px
- *  text            '77' | '425' | '---' (what is shown); fade: { from: '76', p: 0.5, jitter: 0.1 } optional
+ *  text            '77' | '425' | '---' (what is shown); fade: { from: '76', p: 0.5, jitter: 0.1 } or { from: '76', tMs: 40 } optional
+ *                  (p mixes old and new linearly; tMs follows the LCD's measured dynamics, ms since the change began)
  *  H, xr, y0       digit height, right edge of the ones cell, top of digits (px)
  *  pitch           cell pitch / H
  *  geometry        { bodyW, tv, th, gap, bevel, slant, midY, ghostDx, ghostDy, ghostAlpha, inkAlpha, dash }
@@ -107,7 +128,7 @@ export function renderDisplay(p) {
   const cells = cellsOf(p.text);
   const fromCells = p.fade ? cellsOf(p.fade.from) : null;
   const P = p.pitch * p.H;
-  const alphas = cells.map((ch, i) => segAlphas(ch, fromCells ? fromCells[i] : undefined, p.fade?.p ?? 0, rng, p.fade?.jitter ?? 0));
+  const alphas = cells.map((ch, i) => segAlphas(ch, fromCells ? fromCells[i] : undefined, p.fade || {}, rng));
   if (p.text === '---') alphas.forEach(a => { a.g = 1; });
   const gDash = Object.assign({}, g, { dash: p.text === '---' });
 

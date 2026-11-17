@@ -8,10 +8,10 @@
 //   src.health()                       // -> { secondsRead, rejected, secondsMissing, ... } from the filter
 //   src.stop()
 //
-// How a second is made. Every decoded frame is read by readDisplay() and the result is kept for about two seconds
-// (`frames`). Nothing goes to the reading filter until the roast clock asks for a second: sample() takes the frames
+// How a second is made. Every decoded frame is read by readDisplay(), a frame that only has a tentative reading is confirmed
+// (or not) against the frames just before it (reader/confirm.js), and the result is kept for about two seconds (`frames`). Nothing goes to the reading filter until the roast clock asks for a second: sample() takes the frames
 // of the last second, feeds them to the filter, closes the second and returns what it accepted. So
-//   * the work per frame (about 30 ms) happens in the frame loop, never on the tick path, and sample() is cheap;
+//   * the work per frame (about 15 ms once the digits are located) happens in the frame loop, never on the tick path, and sample() is cheap;
 //   * Setup's peek() reads the same recent frames without touching the filter's per-second state or health counters;
 //   * a tick flagged `missed` (the page was throttled or hidden and the clock is catching up) closes an empty second:
 //     a gap, counted as missing, and it never reuses frames from before the stall.
@@ -28,6 +28,7 @@
 import { createCamera as realCreateCamera } from '../reader/camera.js';
 import { readDisplay as realReadDisplay } from '../reader/sevenseg.js';
 import { createReadingFilter as realCreateFilter } from '../reader/filter.js';
+import { createConfirmer } from '../reader/confirm.js';
 import { explainMiss, explainRejection, NO_PICTURE, NO_PROBE } from './camera-reasons.js';
 
 export const STATES = {
@@ -90,7 +91,7 @@ export function createCameraSource({
   monitorMs = 500,
 } = {}) {
   const readerCfg = settings.reader || {};
-  const fps = readerCfg.fps ?? 4;
+  const fps = readerCfg.fps ?? 7.5;   // 7.5 so a reflected segment is seen in two pictures 133 ms apart (reader/confirm.js)
   const filterCfg = { minF: readerCfg.minF ?? 50, maxF: readerCfg.maxF ?? 550, maxJumpF: readerCfg.maxJumpF ?? 15 };
 
   let el = video;
@@ -106,6 +107,7 @@ export function createCameraSource({
   let frames = [];                // [{ at, res }]
   let takenAt = -Infinity;        // frames at or before this time went into an earlier second
   let hint = null, misses = 0;
+  let confirmer = createConfirmer();   // upgrades a tentative reading that the previous pictures back up
   let reading = false;            // readDisplay is running
   let pending = null;             // the newest picture waiting for its read: { img, at, crop }
   let cooldownUntil = 0;          // after a read slower than a frame period, skip pictures until then
@@ -166,7 +168,7 @@ export function createCameraSource({
     const t0 = now();
     let res;
     try {
-      res = readDisplay(f.img, { hint });
+      res = confirmer.step(readDisplay(f.img, { hint }), f.at);
     } catch {
       perf.errors++;
       res = { status: 'none', value: null, digits: [], confidence: 0, debug: { reason: 'reader error' } };
@@ -237,7 +239,7 @@ export function createCameraSource({
       if (myGen !== gen) { try { cam.stop(); } catch { /* ignore */ } return false; }   // stop() came while we waited
       everLive = true;
       badSince = null; liveAt = goodSince = now();
-      frames = []; hint = null; misses = 0;
+      frames = []; hint = null; misses = 0; confirmer.reset();
       startLoop();
       startMonitor();
       setState('live');
@@ -315,9 +317,14 @@ export function createCameraSource({
 
   // ---- reading the recent frames ----
 
-  const median = (vals) => {
-    const a = [...vals].sort((x, y) => x - y), n = a.length;
-    return n % 2 ? a[(n - 1) / 2] : Math.round((a[n / 2 - 1] + a[n / 2]) / 2);
+  // The value actually seen on most frames, the later one when level. Never an average: the display shows 254 or 380 only if it
+  // is those, and a value between two readings may be one the thermometer cannot show.
+  const commonest = (vals) => {
+    const n = new Map(), at = new Map();
+    vals.forEach((v, i) => { n.set(v, (n.get(v) || 0) + 1); at.set(v, i); });
+    let best = null;
+    for (const [v, c] of n) if (best === null || c > n.get(best) || (c === n.get(best) && at.get(v) > at.get(best))) best = v;
+    return best;
   };
 
   // ---- closing a second, and saying why it did not give a value ----
@@ -464,7 +471,7 @@ export function createCameraSource({
         return { kind: 'range', label: 'out of range', text: `The reading ${p.value}°F is outside the accepted range of ${filterCfg.minF} to ${filterCfg.maxF}°F.`, hint: 'Check that the box covers only the top-right number.' };
       }
       const lastO = outcomes[outcomes.length - 1];
-      if (lastO && lastO.kind === 'rejected' && t - lastO.at <= 2500) return { kind: lastO.label === 'jump too big' ? 'jump' : 'disagree', label: lastO.label, text: lastO.text, hint: '' };
+      if (lastO && lastO.kind === 'rejected' && t - lastO.at <= 2500) return { kind: lastO.label === 'jump too big' ? 'jump' : lastO.label === 'impossible number' ? 'impossible' : 'disagree', label: lastO.label, text: lastO.text, hint: '' };
       return null;
     },
     onState(fn) { stateListeners.add(fn); return () => stateListeners.delete(fn); },
@@ -512,13 +519,13 @@ export function createCameraSource({
       cam.stopLoop();
       try { cam.stop(); } catch { /* ignore */ }
       everLive = false;
-      frames = []; last = null; pending = null; hint = null; badSince = null;
+      frames = []; last = null; pending = null; hint = null; badSince = null; confirmer.reset();
       setState('stopped');
     },
 
     /**
      * The latest instantaneous read, for Setup. Looks at the last 1.2 s of frames; it never consumes them.
-     *   ok      most of the recent frames read, and they agree: value is their median
+     *   ok      most of the recent frames read, and they agree: value is the one seen on most frames
      *   dashes  the display shows three dashes (no probe reading)
      *   none    nothing readable
      */
@@ -529,9 +536,9 @@ export function createCameraSource({
       const oks = recent.filter((f) => f.res.status === 'ok' && Number.isFinite(f.res.value)).map((f) => f.res.value);
       const dashes = recent.filter((f) => f.res.status === 'dashes').length;
       if (oks.length && oks.length >= dashes && oks.length * 2 >= recent.length) {
-        const m = median(oks);
+        const m = commonest(oks);
         const agree = oks.filter((v) => Math.abs(v - m) <= AGREE_F);
-        if (agree.length * 2 > oks.length) return { value: median(agree), status: 'ok' };
+        if (agree.length * 2 > oks.length) return { value: m, status: 'ok' };
         return { value: null, status: 'none' };
       }
       if (dashes && dashes > oks.length && dashes * 2 >= recent.length) return { value: null, status: 'dashes' };
@@ -565,7 +572,7 @@ export function createCameraSource({
       return { secondsRead: h.secondsRead, rejected: h.rejected, secondsMissing: h.secondsMissing, missReasons: { ...roastTally }, ...detail(h) };
     },
 
-    setBox(b) { cam.setBox(b); frames = []; pending = null; hint = null; misses = 0; },
+    setBox(b) { cam.setBox(b); frames = []; pending = null; hint = null; misses = 0; confirmer.reset(); },
     readerBox() { return cam.readerBox(); },
     setControl() {},
   };

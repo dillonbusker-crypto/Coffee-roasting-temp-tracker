@@ -1,0 +1,85 @@
+{
+ "about": "ThermoPro TP17 photos taken on an iPhone in daylight after a roast, cropped to the display (1512x560). digitBox is a tight box around the visible THERMO TEMP digits of probe 1, in pixels of the cropped file.",
+ "photos": [
+  {
+   "file": "tp17-111-cooldown.jpg",
+   "value": 111,
+   "digitBox": {
+    "x": 780,
+    "y": 128,
+    "w": 334,
+    "h": 228
+   }
+  },
+  {
+   "file": "tp17-113-cooldown.jpg",
+   "value": 113,
+   "digitBox": {
+    "x": 780,
+    "y": 128,
+    "w": 334,
+    "h": 228
+   }
+  },
+  {
+   "file": "tp17-115-cooldown.jpg",
+   "value": 115,
+   "digitBox": {
+    "x": 780,
+    "y": 128,
+    "w": 334,
+    "h": 228
+   }
+  },
+  {
+   "file": "tp17-117-cooldown.jpg",
+   "value": 117,
+   "digitBox": {
+    "x": 780,
+    "y": 128,
+    "w": 334,
+    "h": 228
+   }
+  },
+  {
+   "file": "tp17-118-cooldown.jpg",
+   "value": 118,
+   "digitBox": {
+    "x": 780,
+    "y": 128,
+    "w": 334,
+    "h": 228
+   }
+  },
+  {
+   "file": "tp17-120-cooldown.jpg",
+   "value": 120,
+   "digitBox": {
+    "x": 780,
+    "y": 128,
+    "w": 334,
+    "h": 228
+   }
+  },
+  {
+   "file": "tp17-122-cooldown.jpg",
+   "value": 122,
+   "digitBox": {
+    "x": 780,
+    "y": 128,
+    "w": 334,
+    "h": 228
+   }
+  },
+  {
+   "file": "tp17-091-cooldown.jpg",
+   "value": 91,
+   "digitBox": {
+    "x": 801,
+    "y": 120,
+    "w": 266,
+    "h": 215
+   }
+  }
+ ]
+}

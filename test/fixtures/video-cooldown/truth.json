@@ -1,0 +1,185 @@
+{
+ "about": "ThermoPro TP17 cooling after a roast, filmed on an iPhone in daylight with the backlight on. A reddish reflection drifts over the right-hand digit for the first 17 s. Frames are every 2nd frame of a 30 fps 960x540 video, cropped to 400x170 at (330,320).",
+ "fps": 15,
+ "frames": 673,
+ "pattern": "f%04d.jpg",
+ "digitBox": {
+  "x": 112,
+  "y": 22,
+  "w": 250,
+  "h": 131
+ },
+ "digitBoxNote": "A tight box around the three digits, in pixels of these frames: what a user would draw. The app widens it to the left by 0.7 x its height (expandBoxForDigits), which here takes in the SET TEMP degree sign and F.",
+ "changes": [
+  {
+   "t": 0.0,
+   "value": 280
+  },
+  {
+   "t": 0.1,
+   "value": 279
+  },
+  {
+   "t": 0.6,
+   "value": 275
+  },
+  {
+   "t": 1.567,
+   "value": 273
+  },
+  {
+   "t": 2.6,
+   "value": 270
+  },
+  {
+   "t": 3.6,
+   "value": 264
+  },
+  {
+   "t": 4.067,
+   "value": 261
+  },
+  {
+   "t": 5.1,
+   "value": 259
+  },
+  {
+   "t": 6.067,
+   "value": 257
+  },
+  {
+   "t": 7.1,
+   "value": 253
+  },
+  {
+   "t": 7.6,
+   "value": 250
+  },
+  {
+   "t": 8.567,
+   "value": 248
+  },
+  {
+   "t": 10.567,
+   "value": 243
+  },
+  {
+   "t": 12.067,
+   "value": 237
+  },
+  {
+   "t": 13.067,
+   "value": 235
+  },
+  {
+   "t": 14.1,
+   "value": 232
+  },
+  {
+   "t": 14.6,
+   "value": 228
+  },
+  {
+   "t": 15.567,
+   "value": 226
+  },
+  {
+   "t": 16.6,
+   "value": 225
+  },
+  {
+   "t": 17.6,
+   "value": 223
+  },
+  {
+   "t": 18.067,
+   "value": 221
+  },
+  {
+   "t": 19.1,
+   "value": 219
+  },
+  {
+   "t": 20.067,
+   "value": 216
+  },
+  {
+   "t": 21.067,
+   "value": 214
+  },
+  {
+   "t": 21.6,
+   "value": 212
+  },
+  {
+   "t": 22.6,
+   "value": 210
+  },
+  {
+   "t": 23.567,
+   "value": 208
+  },
+  {
+   "t": 24.633,
+   "value": 207
+  },
+  {
+   "t": 26.067,
+   "value": 205
+  },
+  {
+   "t": 27.1,
+   "value": 201
+  },
+  {
+   "t": 28.567,
+   "value": 196
+  },
+  {
+   "t": 30.567,
+   "value": 192
+  },
+  {
+   "t": 31.567,
+   "value": 190
+  },
+  {
+   "t": 32.067,
+   "value": 189
+  },
+  {
+   "t": 34.067,
+   "value": 185
+  },
+  {
+   "t": 35.067,
+   "value": 183
+  },
+  {
+   "t": 35.567,
+   "value": 181
+  },
+  {
+   "t": 37.567,
+   "value": 180
+  },
+  {
+   "t": 38.567,
+   "value": 178
+  },
+  {
+   "t": 39.067,
+   "value": 174
+  },
+  {
+   "t": 41.1,
+   "value": 172
+  },
+  {
+   "t": 44.6,
+   "value": 169
+  }
+ ],
+ "changesNote": "The display shows `value` from time t (seconds) until the next entry. It refreshes every 0.5 s. A change takes about 70 ms for segments turning on and up to 200 ms for the ghost of segments turning off, so from 0.07 s before a change to 0.2 s after it either the old or the new value is a correct read.",
+ "labelled": "By eye from the 30 fps frames, cross-checked against the reader where it read."
+}

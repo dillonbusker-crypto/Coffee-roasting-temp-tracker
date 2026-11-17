@@ -129,6 +129,7 @@ export function renderDisplay(p) {
   const fromCells = p.fade ? cellsOf(p.fade.from) : null;
   const P = p.pitch * p.H;
   const alphas = cells.map((ch, i) => segAlphas(ch, fromCells ? fromCells[i] : undefined, p.fade || {}, rng));
+  if (p.dim) for (const d of p.dim) for (const ch of d.segs) if (alphas[d.cell] && alphas[d.cell][ch] > 0) alphas[d.cell][ch] *= d.factor; // a reflection that lightens the ink of some segments
   if (p.offAlpha) alphas.forEach((a, ci) => { for (const k of SEGS) if (a[k] < p.offAlpha) a[k] = Math.max(a[k], p.offAlpha); }); // unlit segments faintly visible (see CONDITIONS.still)
   if (p.text === '---') alphas.forEach(a => { a.g = 1; });
   const gDash = Object.assign({}, g, { dash: p.text === '---' });
@@ -373,15 +374,16 @@ export function addConditions(rng, p, spec) {
     }
     p.glare = null;
   }
-  if (spec.still) { // a reflection that stays put: a grey band dims the upper half of every digit, a spot dims the upper right of the
-    // hundreds digit (where its b segment is), and the unlit segments of every digit show faintly (0.10-0.20 of a lit one)
-    const P = p.pitch * p.H, band = rr(rng, spec.still.band?.[0] ?? 0.3, spec.still.band?.[1] ?? 0.5), spot = rr(rng, spec.still.spot?.[0] ?? 0.5, spec.still.spot?.[1] ?? 0.78);
-    p.glares = (p.glares || []).concat([
-      { x: p.xr - P, y: p.y0 + rr(rng, 0.05, 0.25) * p.H, rx: 2.5 * P, ry: rr(rng, 0.22, 0.34) * p.H, angle: 0, amp: band, pw: 1.6 },
-      { x: p.xr - 2 * P - rr(rng, 0.0, 0.12) * P, y: p.y0 + rr(rng, 0.15, 0.3) * p.H, rx: rr(rng, 0.25, 0.4) * P, ry: rr(rng, 0.25, 0.4) * p.H, angle: 0, amp: spot, pw: 1.4 },
-    ]);
+  if (spec.still) { // the second real video: a reflection that stays put. It lightens the ink of the upper segments (a, b, f) of every
+    // digit, a red patch nearly hides the b segment of the hundreds digit, and the unlit segments show faintly (0.10-0.20 of a lit one).
+    // spec.still = true is the measured strength; { hard: true } adds a brighter band and patch (the background goes up as well).
+    const hard = spec.still && spec.still.hard, P = p.pitch * p.H;
+    p.dim = [{ cell: 0, segs: 'abf', factor: rr(rng, 0.55, 0.9) }, { cell: 1, segs: 'abf', factor: rr(rng, 0.55, 0.9) }, { cell: 2, segs: 'abf', factor: rr(rng, 0.55, 0.9) },
+      { cell: 2, segs: 'b', factor: rr(rng, 0.2, 0.9) }];
+    p.glares = (p.glares || []).concat([{ x: p.xr - P, y: p.y0 + rr(rng, 0.05, 0.25) * p.H, rx: 2.5 * P, ry: rr(rng, 0.22, 0.34) * p.H, angle: 0, amp: hard ? rr(rng, 0.3, 0.5) : rr(rng, 0.05, 0.2), pw: 1.6 }]);
+    if (hard) p.glares.push({ x: p.xr - 2 * P - rr(rng, 0.0, 0.12) * P, y: p.y0 + rr(rng, 0.15, 0.3) * p.H, rx: rr(rng, 0.25, 0.4) * P, ry: rr(rng, 0.25, 0.4) * p.H, angle: 0, amp: rr(rng, 0.5, 0.78), pw: 1.4 });
     p.glare = null;
-    p.offAlpha = rr(rng, spec.still.off?.[0] ?? 0.1, spec.still.off?.[1] ?? 0.2) / Math.max(0.3, p.geometry.inkAlpha);
+    p.offAlpha = rr(rng, 0.1, 0.2) / Math.max(0.3, p.geometry.inkAlpha);
   }
   if (spec.exposure) p.exposure = randomExposure(rng, null, spec.exposure === true ? {} : spec.exposure);
   if (spec.shadow) { // segment shadows off the reflective backing: any direction, varied strength and softness
@@ -404,5 +406,6 @@ export const CONDITIONS = {
   glareGone: { glare: [0.92, 1.0], glareCount: 1 },
   still: { still: true, exposure: { independent: true } }, // the second real video: a reflection that stays put, unlit segments faintly visible
   stillStatic: { still: true },
+  stillHard: { still: { hard: true } },  // the same with a bright band and patch: the background goes up too, q falls to 0.3-0.6 (harsher than the video)
   lighting: { shadow: true, vignette: [0.2, 0.5], gradient: [0.2, 0.5], jpeg: [0.5, 0.85], exposure: { independent: true }, glare: [0.15, 0.45], glareCount: 1 },
 };

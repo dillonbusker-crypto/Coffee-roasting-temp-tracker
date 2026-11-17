@@ -46,6 +46,10 @@ Last updated: Nov 17, 2026. This file is the hand-off log. Update it whenever a 
   - *The TP17 only shows whole-°C values.* Every reading in the video, photos and CSV is round(1.8 × c + 32) for a whole c, so 4 of every 9 whole °F numbers never appear. The filter rejects those as misreads ("impossible number" in Camera details). The video is real speed (confirmed), so the 0.5 s refresh is real.
   - *First real numbers for tuning:* Yellow 3:16 at 349°F, First crack 5:34 at 396°F (provisional setting is 410), Drop 7:05, development 1:31 (21%). Readings bounce by up to 11°F a second from 5:00 to 5:30, after Heat 4→3; the values are all ones the display can show and do not look like single-segment misreads. Wait for two more roasts before changing defaults.
   - *Still wanted:* the JSON from Settings → Data → Export all, for the roast's `reader.missReasons` and rejected counts (the CSV does not carry them).
+- **Kettle test after the Nov 17 release (open).** The user heated water with the probe in a kettle: "worked a lot better", but the reading cut out a couple of times once the display showed three digits. They asked whether their box placement is the cause.
+  - *Box placement tested on the real video:* 11 ways of drawing the box (around two digits or three; 6–20 px loose; 6–12 px inside the digits top and bottom; left edge 8 px into the tens digit or 10 px too far left; right edge up to 30 px into the °F), each widened as the app does. Every one reads all 16 seconds at 1xx and 27–28 of 28 at 2xx, 0 wrong. So the box is unlikely to be the cause.
+  - *Not covered by any real footage:* the moment the third digit appears (99→100), and steam or condensation between the phone and the display.
+  - *Asked for:* Camera details → Copy while it is cutting out, "Share the last unreadable picture", and if possible a 30–60 s phone video of the display going from about 95 to 130°F.
 - **Miss reasons are now shown.** The camera panel says why it can't read, Camera details keeps a 60 s tally, and a saved roast carries `reader.missReasons`.
 
 ## Check on the real phone

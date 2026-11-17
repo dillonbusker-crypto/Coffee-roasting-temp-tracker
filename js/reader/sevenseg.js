@@ -308,6 +308,7 @@ const VIS_ON = 0.5, VIS_OFF = 0.9; // share of a segment's window that must show
 // they give the local background level right next to each segment, whatever a glare patch is doing to the picture there.
 const HOLLOW_U = [-0.60, -0.34, 0.22, 0.38], HOLLOW_L = [-0.60, -0.34, 0.62, 0.78];
 const SEG_HOLLOW = [[0], [0], [1], [1], [1], [0], [0, 1]]; // which hollow(s) border segment a..g (0 upper, 1 lower)
+const TENT_CONTRAST = 0.2; // tentative tier: possibly lit from this share of the expected contrast up
 const ON_CONTRAST = 0.62, ON_CONTRAST_VEILED = 0.5, OFF_CONTRAST = 0.1; // lit: dark by at least this share of the contrast a lit segment should show here; unlit: at most
 const NEIGHBOUR_T = 0.3; // ink this dark (relative to the lit segments) right of the ones cell means a digit was left out
 const ON_LOOSE = 0.5; // registration only: a segment counts as lit above this
@@ -616,11 +617,24 @@ function classify(pl, g, ev) {
       if (!outside && !planeBad && fOn >= ON_T && fMap >= MAP_ON && litByGrey) state = 'on';
       else if (!outside && !planeBad && fOff <= OFF_T && fMapOff <= MAP_OFF && unlitByGrey) state = 'off';
       const hidden = state === '?' && !seen && !outside && !planeBad;
+      // Tentative tier: a segment that is not clearly lit may still be lit under a reflection or a dull patch of the LCD. It counts as
+      // "possibly lit" when it is uniformly darker than the local background by a fair share of what a lit segment should show. Such a
+      // verdict is only ever used together with strict-off verdicts for all the other segments, and only after a second frame has
+      // confirmed it (see confirm.js): a segment half way through changing looks the same in one frame but not over two.
+      let tent = false;
+      if (state === '?' && !outside && !planeBad && seen && cMax >= TENT_CONTRAST * dExp + 2 * ev.sigma) {
+        let best = 0;
+        for (const k of [-1, 0, 1]) {
+          const sx = bar ? 0 : k * dx, sy = bar ? k * dy : 0;
+          best = Math.max(best, darkShareP(ev, x0 + sx, ya + sy, x1 + sx, yb + sy, planeAt, 0.5 * cMax));
+        }
+        tent = best >= 0.85;
+      }
       let dn = 0;
       if (state === 'on') { // darkness relative to the contrast this spot should show if lit
         dn = cMax / Math.max(8, 255 - bseg); // contrast per unit of headroom: constant under a glare veil
       }
-      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, hidden, outside, dbg: [bseg, dExp, cMax, ev.bRef, ev.dRef], why: (fOn >= ON_T ? 'F' : '-') + (fOff <= OFF_T ? 'f' : '-') + (litByGrey ? 'G' : '-') + (unlitByGrey ? 'g' : '-') + (seen ? 's' : '-'), dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
+      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, tent, hidden, outside, dbg: [bseg, dExp, cMax, ev.bRef, ev.dRef], why: (fOn >= ON_T ? 'F' : '-') + (fOff <= OFF_T ? 'f' : '-') + (litByGrey ? 'G' : '-') + (unlitByGrey ? 'g' : '-') + (seen ? 's' : '-'), dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
     }
     cells.push({ index: i, x0: xr + BODY_L * P, x1: xr, y0: g.y0, y1: g.y0 + H, segs });
   }
@@ -679,7 +693,7 @@ function readAt(img, o) {
   }
   res.debug.usedHint = usedHint;
   res.debug.picked = picked;
-  res.debug.hintOut = best && res.status !== 'none' ? { w: pre.w, h: pre.h, geometry: { pi: best.pi, xr0: best.xr0, y0: best.y0, H: best.H, rho: best.rho }, ink: res.debug.inkLevel } : null;
+  res.debug.hintOut = best && (res.status !== 'none' || res.debug.tentative) ? { w: pre.w, h: pre.h, geometry: { pi: best.pi, xr0: best.xr0, y0: best.y0, H: best.H, rho: best.rho }, ink: res.debug.inkLevel } : null;
   return res;
 }
 
@@ -698,10 +712,28 @@ function decodeAt(planes, best, base, pre, ref) {
     geometry: best, slantDeg: pl.deg, U: info.U, zInk: info.zInk, bodyInk: info.bodyInk,
     overlay: { w: pl.w, h: pl.h, slantDeg: pl.deg, cells, ink: inkBytes(pl.data) },
   });
+  const strict = readCells(cells, debug, best, pl, pre, ev, false);
+  // Per-segment evidence of this frame, for confirming it against a neighbour in time (confirm.js): which segments read as lit and
+  // how strongly. Present whenever every segment was judged, strictly or tentatively.
+  const judged = cells.every(c => c.segs.every(sg => sg.state !== '?' || sg.tent));
+  if (judged) {
+    const masksT = cells.map(c => c.segs.reduce((m, sg, k) => m | ((sg.state === 'on' || sg.tent) ? 1 << k : 0), 0));
+    strict.debug.seg7 = { masks: masksT, c: cells.map(c => c.segs.map(sg => +sg.cRel.toFixed(3))), strict: strict.status !== 'none' };
+    if (strict.status === 'none' && strict.debug.reason === 'ambiguous segment') {
+      const t = readCells(cells, Object.assign({}, debug), best, pl, pre, ev, true);
+      if (t.status === 'ok') strict.debug.tentative = { value: t.value, digits: t.digits, confidence: t.confidence };
+    }
+  }
+  return strict;
+}
+
+// Turns the classified segments into a reading. tentative: segments marked `tent` count as lit too, the fade checks are skipped
+// (time takes over that job) and the answer is only ever used as a candidate.
+function readCells(cells, debug, best, pl, pre, ev, tentative) {
   const masks = [0, 0, 0];
   let minMargin = 1, doubt = null, hiddenSeg = null, cutSeg = null;
   cells.forEach((c, i) => c.segs.forEach((sg, s) => {
-    if (sg.state === 'on') { masks[i] |= 1 << s; minMargin = Math.min(minMargin, (sg.fOn - ON_T) / (1 - ON_T)); }
+    if (sg.state === 'on' || (tentative && sg.tent)) { masks[i] |= 1 << s; minMargin = Math.min(minMargin, sg.state === 'on' ? (sg.fOn - ON_T) / (1 - ON_T) : 0); }
     else if (sg.state === 'off') minMargin = Math.min(minMargin, (OFF_T - sg.fOff) / OFF_T);
     else {
       if (sg.hidden) hiddenSeg = hiddenSeg || { cell: i, seg: sg.name, visWin: sg.visWin };
@@ -714,7 +746,7 @@ function decodeAt(planes, best, base, pre, ref) {
   // Three dashes: the middle bar of all three cells lit and every other segment that can be seen unlit. (When the digit height is not
   // pinned by other ink the lattice may stand taller than the crop; windows outside the crop cannot be seen and are ignored here,
   // which is safe because no number lights only the middle bar in all three cells.)
-  if (cells.every(c => c.segs[6].state === 'on' && c.segs.every((sg, k) => k === 6 || sg.state === 'off' || (sg.state === '?' && (sg.outside || (sg.fMap <= 0.2 && sg.fOn <= 0.5)))))) {
+  if (!tentative && cells.every(c => c.segs[6].state === 'on' && c.segs.every((sg, k) => k === 6 || sg.state === 'off' || (sg.state === '?' && (sg.outside || (sg.fMap <= 0.2 && sg.fOn <= 0.5)))))) {
     return { status: 'dashes', value: null, digits: '---', confidence: minMargin, debug };
   }
   if (hiddenSeg) return none('segment washed out by glare', Object.assign(debug, hiddenSeg));
@@ -725,7 +757,7 @@ function decodeAt(planes, best, base, pre, ref) {
   // not matter.)
   let level = 0;
   const medians = [];
-  for (const c of cells) {
+  for (const c of tentative ? [] : cells) {
     const lit = c.segs.filter(sg => sg.state === 'on').map(sg => sg.dark).sort((x, y) => x - y);
     if (!lit.length) continue;
     const med = lit[Math.floor(lit.length / 2)];
@@ -734,7 +766,7 @@ function decodeAt(planes, best, base, pre, ref) {
     if (lit.length >= 2 && lit[0] < FADE_T * med) return none('segments mid-fade', Object.assign(debug, { minDark: lit[0], digitMedian: med, cell: c.index }));
   }
   // and the digits must look alike each other: a digit that is half way through changing is lighter than the ones that are not
-  if (medians.length > 1 && Math.min(...medians) < CELL_FADE_T * Math.max(...medians)) return none('segments mid-fade', Object.assign(debug, { digitMedians: medians }));
+  if (!tentative && medians.length > 1 && Math.min(...medians) < CELL_FADE_T * Math.max(...medians)) return none('segments mid-fade', Object.assign(debug, { digitMedians: medians }));
   debug.inkLevel = level;
   // A 7 whose top bar runs off the right edge of the crop looks like a 1. If the ones digit reads as 1 and thick ink runs from inside
   // that digit to the last column of the crop, the digit may continue beyond the crop, so the frame is doubtful. Ink at the edge

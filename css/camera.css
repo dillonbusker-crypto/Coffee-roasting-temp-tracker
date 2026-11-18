@@ -38,9 +38,11 @@
   position: absolute; border: 2px solid var(--temp); border-radius: 3px; background: rgba(255, 180, 84, 0.1);
   touch-action: none; cursor: move;
 }
-.cb-ext {
-  position: absolute; border: 2px dashed var(--warn); border-right: 0; background: rgba(251, 191, 36, 0.14);
-  pointer-events: none;
+/* The two lines that split the box into three digit slots. Thin and see-through so they do not hide the digits; a dark
+   edge keeps them visible on a bright display. They are drawn here only: the reader gets the plain picture. */
+.cb-div {
+  position: absolute; top: 0; bottom: 0; width: 0; margin-left: -0.5px; pointer-events: none;
+  border-left: 1px solid rgba(255, 180, 84, 0.55); box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.35);
 }
 /* Grab areas sit just outside the box, so a small box can still be moved from inside it. */
 .cb-h { position: absolute; touch-action: none; }
@@ -67,7 +69,6 @@
 .cam-legend { margin: 10px 0 0; font-size: 13px; line-height: 18px; color: var(--muted); }
 .cam-key { display: inline-block; width: 16px; height: 10px; border-radius: 2px; margin: 0 6px 0 0; vertical-align: -1px; }
 .cam-key-box { border: 2px solid var(--temp); background: rgba(255, 180, 84, 0.2); }
-.cam-key-ext { border: 2px dashed var(--warn); background: rgba(251, 191, 36, 0.2); margin-left: 12px; }
 
 /* ---- Magnified crop and the value read ---- */
 

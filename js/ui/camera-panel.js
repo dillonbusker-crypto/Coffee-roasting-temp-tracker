@@ -21,7 +21,12 @@ import { slug } from '../sources/camera-reasons.js';
 
 const BOX_KEY = 'rt.camera.box';
 const GRANTED_KEY = 'rt.camera.granted';
-const DEFAULT_BOX = { x: 0.52, y: 0.3, w: 0.3, h: 0.22 };
+// The box is the reader's crop: three digit slots (hundreds, tens, ones). This is the old default box (x .52, w .3, h .22) widened
+// to the left by expandBoxForDigits on a 16:9 picture.
+const DEFAULT_BOX = { x: 0.415, y: 0.3, w: 0.405, h: 0.22 };
+// Boxes saved before the single-box design were the user's tight box around the digits, and the reader widened it to the left
+// when it cropped. They carry no `v`. A box saved now carries BOX_VERSION: it is the reader's crop itself.
+export const BOX_VERSION = 2;
 
 const store = {
   get(key) { try { return localStorage.getItem(key); } catch { return null; } },
@@ -29,14 +34,32 @@ const store = {
   remove(key) { try { localStorage.removeItem(key); } catch { /* ignore */ } },
 };
 
-export function loadBox() {
+/** The saved box and whether it is an old one (saved without a version): { box, legacy }. Nothing saved gives the default. */
+export function readStoredBox() {
   try {
     const b = JSON.parse(store.get(BOX_KEY));
-    if (b && [b.x, b.y, b.w, b.h].every(Number.isFinite)) return clampBox(b);
+    if (b && [b.x, b.y, b.w, b.h].every(Number.isFinite)) return { box: clampBox(b), legacy: !(b.v >= BOX_VERSION) };
   } catch { /* nothing saved, or not valid */ }
-  return { ...DEFAULT_BOX };
+  return { box: { ...DEFAULT_BOX }, legacy: false };
 }
-export const saveBox = (b) => store.set(BOX_KEY, JSON.stringify({ x: b.x, y: b.y, w: b.w, h: b.h }));
+export const loadBox = () => readStoredBox().box;
+export const saveBox = (b) => store.set(BOX_KEY, JSON.stringify({ x: b.x, y: b.y, w: b.w, h: b.h, v: BOX_VERSION }));
+
+/** An old saved box as the one box: the area the reader used to crop (the tight box widened to the left). Needs the video size. */
+export function convertLegacyBox(box, videoW, videoH) {
+  const { x, y, w, h } = expandBoxForDigits(box, videoW, videoH);
+  return clampBox({ x, y, w, h });
+}
+
+/** Convert and save the old box saved on this phone, if there is one. Returns the new box, or null when there was nothing to convert. */
+export function migrateStoredBox(videoW, videoH) {
+  if (!videoW || !videoH) return null;
+  const { box, legacy } = readStoredBox();
+  if (!legacy) return null;
+  const next = convertLegacyBox(box, videoW, videoH);
+  saveBox(next);
+  return next;
+}
 export const wasGranted = () => store.get(GRANTED_KEY) === '1';
 
 /** True when this page could open a camera: the API exists and the page is a secure context. */
@@ -195,7 +218,9 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
 
   let source = null;
   let offs = [];
-  let box = loadBox();
+  const stored = readStoredBox();
+  let box = stored.box;
+  let legacy = stored.legacy;   // an old box: converted to the one box as soon as the video size is known (see migrate)
   let cropBox = null;
   let ro = null;
 
@@ -215,18 +240,17 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
     h('div', { class: 'cam-mag' }, h('span', { class: 'cam-cap' }, 'What the reader sees'), crop),
     h('div', { class: 'cam-val' }, h('span', { class: 'cam-cap' }, 'Reads'), value));
   const live = h('div', { class: 'cam-live' },
-    h('p', { class: 'cam-hint' }, 'Drag the box over the top-right number. Drag a corner or edge to resize it.'),
+    h('p', { class: 'cam-hint' }, 'Put the box around the top-right number, with a little room around it. Line up the two right-hand slots with the digits; the left slot is for the hundreds digit.'),
     stageWrap,
     h('p', { class: 'cam-legend' },
-      h('span', { class: 'cam-key cam-key-box' }), 'Reading box ',
-      h('span', { class: 'cam-key cam-key-ext' }), 'Also searched, for a third digit'),
+      h('span', { class: 'cam-key cam-key-box' }), 'Reading box: drag it to move it, drag a corner or edge to resize it. The faint lines mark the three digit slots.'),
     readRow, status, why);
 
   const tips = h('div', { class: 'cam-tips', id: 'cam-tips' },
     h('h3', null, 'Aiming tips'),
     h('ul', null,
-      h('li', null, 'Box only the top-right number, THERMO TEMP for probe 1. Leave out the °F and the number to its left.'),
-      h('li', null, 'Keep the SET TEMP number out of the dashed area too: the reader looks there for a third digit.'),
+      h('li', null, 'Box only the top-right number, THERMO TEMP for probe 1.'),
+      h('li', null, 'Keep the SET TEMP number and its °F out of the box.'),
       h('li', null, 'Face the display square-on, and move the phone to avoid glare. The backlight goes off after 10 seconds, and that’s fine.')));
 
   // Camera details: collapsed; refreshed once a second while open.
@@ -291,15 +315,25 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
     const w = Math.min(cw, maxH * aspect);
     stage.style.width = `${Math.round(w)}px`;
     stage.style.height = `${Math.round(w / aspect)}px`;
+    migrate();
     if (cropBox) cropBox.render();
   }
 
-  const expand = (b) => expandBoxForDigits(b, video.videoWidth || 16, video.videoHeight || 9);
+  // An old saved box becomes the one box the first time the video size is known: the area the reader used to crop, so
+  // the reading does not change. It is saved at once, so this happens once.
+  function migrate() {
+    if (!legacy || !cropBox || !video.videoWidth || !video.videoHeight) return;
+    legacy = false;
+    box = convertLegacyBox(box, video.videoWidth, video.videoHeight);
+    saveBox(box);
+    cropBox.setBox(box);
+    if (source) source.setBox(box);
+  }
 
   cropBox = createCropBox({
-    stage, box, expand,
-    onChange: (b) => { box = b; if (source) source.setBox(b); },
-    onCommit: (b) => { box = b; saveBox(b); },
+    stage, box,
+    onChange: (b) => { legacy = false; box = b; if (source) source.setBox(b); },
+    onCommit: (b) => { legacy = false; box = b; saveBox(b); },
   });
 
   video.addEventListener('loadedmetadata', layout);
@@ -498,6 +532,10 @@ export const cameraEntry = {
       requireTap: !wasGranted(),
     });
     src.onState(({ state }) => {
+      if (state === 'live' && !panel) {   // no panel to convert an old saved box: do it here, once the video size is known
+        const v = src.video, next = v && migrateStoredBox(v.videoWidth, v.videoHeight);
+        if (next) src.setBox(next);
+      }
       if (state === 'live') store.set(GRANTED_KEY, '1');
       else if (state === 'denied') store.remove(GRANTED_KEY);
       else if (state === 'stopped') { const v = src.video; if (v && v.dataset.parked) v.remove(); }

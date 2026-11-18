@@ -209,8 +209,15 @@ async function touchDrag(client, from, to, steps = 10) {
 const stageRect = (page) => page.$eval('#cam-stage', (e) => { const r = e.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
 const boxRect = (page) => page.$eval('.cb-box', (e) => { const r = e.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height, right: r.right, bottom: r.bottom }; });
 
-// The THERMO TEMP digits '77' in the fake scene, as a normalised box with a little margin (see fakeCameraInit).
-const TARGET = { x: 555 / 1280, y: 260 / 720, w: 187 / 1280, h: 130 / 720 };
+// The THERMO TEMP digits '77' in the fake scene, as a normalised box with a little margin (see fakeCameraInit). This is the tight
+// box the app used to ask for and then widen to the left; saved boxes from that time look like this.
+const TIGHT = { x: 555 / 1280, y: 260 / 720, w: 187 / 1280, h: 130 / 720 };
+// The one box for the new design: the same area the reader used to crop (the tight box plus 0.85 of its height to the left), so the
+// right-hand two of its three slots sit on the digits and the left slot is empty at 77.
+const TARGET = (() => {
+  const ext = 0.85 * TIGHT.h * 720 / 1280;
+  return { x: TIGHT.x - ext, y: TIGHT.y, w: TIGHT.w + ext, h: TIGHT.h };
+})();
 
 async function dragBoxOnto(page, client, target = TARGET) {
   const s = await stageRect(page);
@@ -283,6 +290,97 @@ async function iosClocks(browser, base, finish) {
   }
 }
 
+
+// One box, the dividers, and boxes saved before the single-box design.
+async function oneBoxTest(browser, base, finish) {
+  console.log('One box: new user, dividers, and a box saved by the old version');
+  const near = (a, b, tol, what) => assert.ok(Math.abs(a - b) < tol, `${what}: ${a} vs ${b}`);
+  const stored = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('rt.camera.box')));
+  const shown = async (page) => { const s = await stageRect(page), b = await boxRect(page); return { x: (b.left - s.left) / s.width, y: (b.top - s.top) / s.height, w: b.width / s.width, h: b.height / s.height }; };
+
+  {
+    step('A new user: a default three-slot box, one outline, two dividers, nothing saved until the box is moved');
+    const t = await newPage(browser, base, { granted: true });
+    await t.go('?nosw');
+    await t.page.evaluate(() => window.__fake.ready);
+    await t.page.waitForSelector('.cb-box');
+    await t.page.waitForFunction(() => document.querySelector('#cam-stage video').videoWidth > 0);
+    assert.equal(await t.page.locator('.cb-ext').count(), 0);
+    assert.equal(await t.page.locator('.cb-box .cb-div').count(), 2);
+    const d = await shown(t.page);
+    assert.ok(d.w / d.h * (1280 / 720) > 2.8 && d.w / d.h * (1280 / 720) < 4, `default box is about three digits wide (${(d.w / d.h * 1280 / 720).toFixed(2)} heights)`);
+    assert.equal(await t.page.evaluate(() => localStorage.getItem('rt.camera.box')), null, 'a default box is not saved');
+    const hint = await text(t.page, '.cam-hint');
+    assert.match(hint, /Put the box around the top-right number/);
+    assert.match(hint, /left slot is for the hundreds digit/);
+    const tipText = await text(t.page, '#cam-tips');
+    assert.match(tipText, /Keep the SET TEMP number and its °F out of the box/);
+    const all = await text(t.page, '#cam-panel');
+    assert.doesNotMatch(all, /dashed|Also searched|third digit/i);
+    finish('one box, new user', t.errors);
+    await t.context.close();
+  }
+
+  {
+    step('A box saved by the old version (no version flag) becomes the area the reader used to crop, once, and is saved');
+    const t = await newPage(browser, base, { granted: true });
+    await t.page.addInitScript((tight) => {
+      try { if (!sessionStorage.getItem('rt.test.boxset')) { sessionStorage.setItem('rt.test.boxset', '1'); localStorage.setItem('rt.camera.box', JSON.stringify(tight)); } } catch { /* ignore */ }
+    }, TIGHT);
+    await t.go('?nosw');
+    await t.page.evaluate(() => window.__fake.ready);
+    await t.page.waitForFunction(() => /Reading 77/.test(document.getElementById('cam-status').textContent), null, { timeout: 10000 });
+    const want = { x: TARGET.x, y: TARGET.y, w: TARGET.w, h: TARGET.h };
+    const d = await shown(t.page);
+    for (const k of ['x', 'y', 'w', 'h']) near(d[k], want[k], 0.004, `shown box ${k}`);
+    const sv = await stored(t.page);
+    assert.equal(sv.v, 2, 'saved with the new version');
+    for (const k of ['x', 'y', 'w', 'h']) near(sv[k], want[k], 0.004, `saved box ${k}`);
+    const rb = await t.page.evaluate(() => window.__rt.app.setup.camera.source.readerBox());
+    for (const k of ['x', 'y', 'w', 'h']) near(rb[k], want[k], 0.004, `reader box ${k}`);
+    assert.equal(await text(t.page, '#cam-value'), '77°F', 'reads without touching the box');
+    await shot(t.page, 'camera-onebox-converted.png');
+    step('Reloading keeps the converted box: it is not widened a second time');
+    await t.page.reload();
+    await t.page.waitForFunction(() => /Reading 77/.test(document.getElementById('cam-status').textContent), null, { timeout: 10000 });
+    const d2 = await shown(t.page);
+    for (const k of ['x', 'y', 'w', 'h']) near(d2[k], want[k], 0.004, `box after reload ${k}`);
+    const sv2 = await stored(t.page);
+    for (const k of ['x', 'y', 'w', 'h']) near(sv2[k], sv[k], 1e-9, `saved box after reload ${k}`);
+    finish('one box, old saved box', t.errors);
+    await t.context.close();
+  }
+
+  {
+    step('The dividers are only in the overlay: the pixels the reader gets are the plain picture');
+    const t = await newPage(browser, base, { granted: true });
+    const client = await t.context.newCDPSession(t.page);
+    await t.go('?nosw');
+    await t.page.evaluate(() => window.__fake.ready);
+    await t.page.waitForSelector('#cam-stage video');
+    await dragBoxOnto(t.page, client);
+    await t.page.waitForFunction(() => /Reading 77/.test(document.getElementById('cam-status').textContent), null, { timeout: 8000 });
+    await sleep(600);
+    const r = await t.page.evaluate(() => {
+      const src = window.__rt.app.setup.camera.source, cap = src.captured().ok, rb = src.readerBox(), vw = src.video.videoWidth, vh = src.video.videoHeight;
+      const c = { x: Math.round(rb.x * vw), y: Math.round(rb.y * vh), w: cap.imageData.width, h: cap.imageData.height, scale: cap.imageData.height === Math.round(rb.h * vh) ? 1 : 0 };
+      const cv = document.createElement('canvas'); cv.width = c.w; cv.height = c.h;
+      const cx = cv.getContext('2d', { willReadFrequently: true });
+      cx.drawImage(src.video, c.x, c.y, c.w, c.h, 0, 0, c.w, c.h);
+      const plain = cx.getImageData(0, 0, c.w, c.h).data, got = cap.imageData.data, w = c.w, h = c.h;
+      const col = (x) => { let s = 0; for (let y = 0; y < h; y++) { const i = (y * w + x) * 4; s += Math.abs(plain[i] - got[i]) + Math.abs(plain[i + 1] - got[i + 1]) + Math.abs(plain[i + 2] - got[i + 2]); } return s / h / 3; };
+      const dividerCols = [Math.round(w / 3), Math.round(2 * w / 3)];
+      let other = 0, n = 0;
+      for (let x = 4; x < w - 4; x++) { if (dividerCols.some((d) => Math.abs(d - x) <= 2)) continue; other += col(x); n++; }
+      return { w, h, dividerDiff: dividerCols.map((d) => Math.max(col(d - 1), col(d), col(d + 1))), otherDiff: other / n, canvasesInOverlay: document.querySelectorAll('.cb-layer canvas, .cam-stage canvas').length, dataW: cap.imageData.width, scale: c.scale };
+    });
+    assert.equal(r.canvasesInOverlay, 0, 'nothing is painted onto a canvas over the picture');
+    assert.equal(r.scale, 1, 'the test compares at full size');
+    assert.ok(r.dividerDiff.every((x) => x < r.otherDiff * 3 + 3), `reader pixels at the divider columns differ from the plain picture by ${r.dividerDiff.map((x) => x.toFixed(1))} (elsewhere ${r.otherDiff.toFixed(1)})`);
+    finish('one box, dividers', t.errors);
+    await t.context.close();
+  }
+}
 
 // Why it cannot read: two different ways to make the display unreadable, and the pictures kept for sharing.
 async function reasonsTest(browser, base, finish) {
@@ -514,10 +612,22 @@ async function main() {
     for (const k of ['x', 'y', 'w', 'h']) assert.ok(Math.abs(got[k] - TARGET[k]) < 0.02, `box ${k} ${got[k].toFixed(3)} vs ${TARGET[k].toFixed(3)}`);
     const saved = JSON.parse(await page.evaluate(() => localStorage.getItem('rt.camera.box')));
     assert.ok(Math.abs(saved.x - got.x) < 0.005 && Math.abs(saved.w - got.w) < 0.005, 'the box is remembered');
-    step('The reader area (box widened to the left) is shown and stays clear of most of the SET TEMP number (widening 0.85: its degree sign and F may enter, see reader/camera.js)');
-    const ext = await page.$eval('.cb-ext', (e) => { const r = e.getBoundingClientRect(); return { left: r.left, width: r.width, hidden: e.hidden }; });
-    assert.equal(ext.hidden, false);
-    assert.ok(ext.width > 20 && ext.left > s.left + 0.33 * s.width, `ext starts at ${((ext.left - s.left) / s.width).toFixed(3)} of the picture`);
+    step('One box only: no dashed area, two faint dividers split the box into three equal slots, and the reader crops exactly the box');
+    assert.equal(await page.locator('.cb-ext').count(), 0, 'no second outline');
+    const divs = await page.$$eval('.cb-box .cb-div', (els) => els.map((e) => { const r = e.getBoundingClientRect(); return { left: r.left, width: r.width, pe: getComputedStyle(e).pointerEvents, op: getComputedStyle(e).borderLeftColor }; }));
+    assert.equal(divs.length, 2, 'two dividers');
+    for (const [i, d] of divs.entries()) {
+      const want = b.left + 2 + ((b.width - 4) * (i + 1)) / 3;   // thirds of the area inside the 2 px border
+      assert.ok(Math.abs(d.left - want) < 1.5, `divider ${i + 1} at ${d.left.toFixed(1)}, expected ${want.toFixed(1)}`);
+      assert.ok(d.width <= 1.5 && d.pe === 'none', `divider is thin and lets touches through (${d.width}px, ${d.pe})`);
+    }
+    const wantW = Math.round(got.w * 1280);
+    await page.waitForFunction((w) => { const ok = window.__rt.app.setup.camera.source.captured().ok; return ok && Math.abs(ok.w - w) <= 2; }, wantW, { timeout: 8000 })
+      .catch(async () => assert.fail(`the crop is ${await page.evaluate(() => { const ok = window.__rt.app.setup.camera.source.captured().ok; return ok && ok.w; })} px wide for a box ${wantW} px wide`));
+    const rb = await page.evaluate(() => window.__rt.app.setup.camera.source.readerBox());
+    for (const k of ['x', 'y', 'w', 'h']) assert.ok(Math.abs(rb[k] - got[k]) < 0.002, `the reader box ${k} ${rb[k]} is the drawn box ${got[k]}`);
+    assert.equal(rb.clipped, false);
+    assert.ok(Math.abs(got.x + got.w - (TIGHT.x + TIGHT.w)) < 0.02 && got.x < TIGHT.x - 0.05, 'the box starts left of the digits: the left slot is empty at 77');
 
     step('The live value matches the scene, and Start enables after 5 good reads');
     await page.waitForFunction(() => /Reading 77/.test(document.getElementById('cam-status').textContent), null, { timeout: 8000 });
@@ -800,6 +910,7 @@ async function main() {
 
     await iosClocks(browser, base, finish);
     summary.reasons = await reasonsTest(browser, base, finish);
+    await oneBoxTest(browser, base, finish);
 
     // ============================================================ no wake lock
     console.log('Wake lock unsupported');
@@ -822,4 +933,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch((err) => { console.error(err); process.exit(1); });
-module.exports = { fakeCameraInit, newPage, startServer, dragBoxOnto, touchDrag, waitT, waitHash, TARGET };
+module.exports = { fakeCameraInit, newPage, startServer, dragBoxOnto, touchDrag, waitT, waitHash, TARGET, TIGHT, oneBoxTest };

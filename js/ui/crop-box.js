@@ -1,11 +1,12 @@
 // A draggable, resizable box laid over a camera preview. Touch and mouse (pointer events).
 //
-//   const cb = createCropBox({ stage, box, expand, onChange, onCommit });
+//   const cb = createCropBox({ stage, box, onChange, onCommit });
 //   cb.setBox(b); cb.getBox(); cb.render(); cb.destroy();
 //
 // `stage` is a positioned element exactly the size of the picture; the box is in coordinates normalised to it (0..1).
-// `expand(box)` returns the area the reader actually looks at (the box widened to the left for a third digit), drawn as a
-// dashed region beside the box. onChange fires on every move; onCommit once when the finger lifts.
+// The box IS the area the reader looks at: nothing is added to it out of sight. Two faint vertical lines split it into three
+// equal digit slots (hundreds, tens, ones). They are drawn here, in the overlay, and never in the pixels the reader gets.
+// onChange fires on every move; onCommit once when the finger lifts.
 //
 // Gestures: drag inside the box to move it, drag a corner or an edge to resize it, drag on the empty picture to draw a
 // new box. The grab areas of the handles sit just outside the box so a small box can still be moved with a thumb. The
@@ -18,16 +19,23 @@ import { h } from './dom.js';
 import { clampBox } from '../reader/camera.js';
 
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
-const MIN = 0.02;     // smallest box side, as a fraction of the picture
+// Smallest box, as a fraction of the picture. The box holds three digit slots, so it cannot be a speck: at 1920 by 1080 this
+// is 154 by 43 pixels, enough for the reader (it refuses crops under 24 by 16 pixels) and still easy to place with a thumb.
+const MIN_W = 0.08, MIN_H = 0.04;
+export const SLOTS = 3;
 
-export function createCropBox({ stage, box, expand = null, onChange = () => {}, onCommit = () => {} }) {
+export function createCropBox({ stage, box, onChange = () => {}, onCommit = () => {} }) {
   let cur = clampBox(box);
   let drag = null;
 
-  const ext = h('div', { class: 'cb-ext', 'aria-hidden': 'true' });
+  const dividers = [1, 2].map((i) => {
+    const d = h('div', { class: 'cb-div', 'aria-hidden': 'true' });
+    d.style.left = `${(i * 100 / SLOTS).toFixed(3)}%`;
+    return d;
+  });
   const handles = HANDLES.map((n) => h('div', { class: 'cb-h', 'data-h': n }, h('i')));
-  const boxEl = h('div', { class: 'cb-box', 'data-h': 'move', role: 'group', 'aria-label': 'Reading box. Drag to move, drag a corner to resize.' }, ...handles);
-  const layer = h('div', { class: 'cb-layer' }, ext, boxEl);
+  const boxEl = h('div', { class: 'cb-box', 'data-h': 'move', role: 'group', 'aria-label': 'Reading box. Drag to move, drag a corner to resize.' }, ...dividers, ...handles);
+  const layer = h('div', { class: 'cb-layer' }, boxEl);
   stage.append(layer);
 
   const pct = (v) => `${(v * 100).toFixed(3)}%`;
@@ -35,13 +43,6 @@ export function createCropBox({ stage, box, expand = null, onChange = () => {}, 
   function render() {
     boxEl.style.left = pct(cur.x); boxEl.style.top = pct(cur.y);
     boxEl.style.width = pct(cur.w); boxEl.style.height = pct(cur.h);
-    const rb = expand ? expand(cur) : null;
-    if (rb && rb.x < cur.x - 1e-4) {
-      ext.hidden = false;
-      ext.style.left = pct(rb.x); ext.style.top = pct(cur.y);
-      ext.style.width = pct(cur.x - rb.x); ext.style.height = pct(cur.h);
-      ext.dataset.clipped = rb.clipped ? 'true' : 'false';
-    } else ext.hidden = true;
   }
 
   function pt(e) {
@@ -77,13 +78,13 @@ export function createCropBox({ stage, box, expand = null, onChange = () => {}, 
       b = { ...drag.box, x: drag.box.x + dx, y: drag.box.y + dy };
     } else if (drag.mode === 'draw') {
       b = { x: Math.min(drag.start.x, p.x), y: Math.min(drag.start.y, p.y), w: Math.abs(dx), h: Math.abs(dy) };
-      if (b.w < MIN || b.h < MIN) { e.preventDefault(); return; }
+      if (b.w < MIN_W || b.h < MIN_H) { e.preventDefault(); return; }
     } else {
       let x0 = drag.box.x, y0 = drag.box.y, x1 = x0 + drag.box.w, y1 = y0 + drag.box.h;
-      if (drag.h.includes('w')) x0 = Math.min(x1 - MIN, Math.max(0, x0 + dx));
-      if (drag.h.includes('e')) x1 = Math.max(x0 + MIN, Math.min(1, x1 + dx));
-      if (drag.h.includes('n')) y0 = Math.min(y1 - MIN, Math.max(0, y0 + dy));
-      if (drag.h.includes('s')) y1 = Math.max(y0 + MIN, Math.min(1, y1 + dy));
+      if (drag.h.includes('w')) x0 = Math.min(x1 - MIN_W, Math.max(0, x0 + dx));
+      if (drag.h.includes('e')) x1 = Math.max(x0 + MIN_W, Math.min(1, x1 + dx));
+      if (drag.h.includes('n')) y0 = Math.min(y1 - MIN_H, Math.max(0, y0 + dy));
+      if (drag.h.includes('s')) y1 = Math.max(y0 + MIN_H, Math.min(1, y1 + dy));
       b = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
     }
     set(b);

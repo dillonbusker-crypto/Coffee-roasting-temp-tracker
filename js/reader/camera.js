@@ -12,10 +12,12 @@
 // Is the stream alive? Only positive evidence says it is not (see startLoop). A clock that has never been seen to move
 // (iOS Safari reports mediaTime 0 and a fixed currentTime for camera streams) is not evidence of anything.
 //
-// The reader's crop is the user's box widened to the left by a little over one digit position (see expandBoxForDigits) so a third digit
-// has room when the reading rolls over from 99 to 100, even if the box was drawn tight around two digits.
+// The reader's crop IS the box the user sees and drags in Setup: nothing is added to it. The box holds three digit slots, and the
+// hundreds slot stays empty until the reading passes 99 (see ui/crop-box.js). expandBoxForDigits is what the app used to apply
+// on top of a tight box; it is kept for converting a box saved before that change (ui/camera-panel.js) and for the reader test
+// page and the real-media test, which still widen a tight box themselves (createCamera's `widenForDigits` option).
 
-// Widening to the left, as a multiple of the box height. One cell pitch is 0.70-0.72 digit heights (measured on 9 photos and both videos),
+// The widening the app used to apply to the user's tight box, as a multiple of the box height. One cell pitch is 0.70-0.72 digit heights (measured on 9 photos and both videos),
 // and the lattice needs about 0.14 more on the left (the slant, the segment windows and the fit around the cell): a full hundreds digit
 // next to a box drawn tight around two digits needs 0.85. At 0.7 the hundreds cell touched the crop's edge on the second video
 // ("digit cut off at the edge of the crop" on 313 of 512 frames).
@@ -159,7 +161,7 @@ function createLiveLoop(video, fps, cb, opts) {
   };
 }
 
-export function createCamera({ video, box = { x: 0.55, y: 0.4, w: 0.3, h: 0.15 }, fps = 4, settleMs = 1200, maxCropHeight = MAX_CROP_HEIGHT, env: envOpts = {} } = {}) {
+export function createCamera({ video, box = { x: 0.45, y: 0.4, w: 0.4, h: 0.15 }, fps = 4, widenForDigits = false, settleMs = 1200, maxCropHeight = MAX_CROP_HEIGHT, env: envOpts = {} } = {}) {
   const env = Object.assign({
     now: () => performance.now(),
     setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (id) => clearTimeout(id),
@@ -229,17 +231,20 @@ export function createCamera({ video, box = { x: 0.55, y: 0.4, w: 0.3, h: 0.15 }
 
     setBox(b) { userBox = clampBox(b); },
 
-    /** The box the reader actually crops: the user's box widened for a third digit. */
+    /**
+     * The box the reader actually crops: the box itself, as drawn. `clipped` is kept for callers that read it; it is only ever
+     * true with widenForDigits (the reader test page), when the video's left edge cut the widening short.
+     */
     readerBox() {
-      const vw = video.videoWidth || 1, vh = video.videoHeight || 1;
-      return expandBoxForDigits(userBox, vw, vh);
+      if (widenForDigits) return expandBoxForDigits(userBox, video.videoWidth || 1, video.videoHeight || 1);
+      return { x: userBox.x, y: userBox.y, w: userBox.w, h: userBox.h, clipped: false };
     },
 
     /** ImageData of the reader's crop, or null if no frame is available yet. */
     grabCrop() {
       const vw = video.videoWidth, vh = video.videoHeight;
       if (!vw || !vh || video.readyState < 2) return null;
-      const rb = expandBoxForDigits(userBox, vw, vh);
+      const rb = api.readerBox();
       const out = grabCropFrom(video, vw, vh, rb, work);
       api.lastCrop = Object.assign({ videoW: vw, videoH: vh, clipped: rb.clipped }, out.rect, { scale: out.scale });
       stats.framesGrabbed++;

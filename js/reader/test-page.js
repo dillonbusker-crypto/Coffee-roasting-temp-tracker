@@ -454,7 +454,7 @@ $('live-start').addEventListener('click', async () => {
   if (liveCam) return;
   msg('');
   try {
-    liveCam = createCamera({ video: liveVideo, box: liveStage.box, fps: FPS });
+    liveCam = createCamera({ video: liveVideo, box: liveStage.box, fps: FPS, widenForDigits: true });
     $('live-start').disabled = true;
     const size = await liveCam.start();
     liveStage.setSourceSize(size.width, size.height);

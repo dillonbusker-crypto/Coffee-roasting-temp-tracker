@@ -21,7 +21,10 @@ Last updated: Nov 18, 2026. This file is the hand-off log. Update it whenever a 
 
 1. **First run on the iPhone.** Open the live site in Safari, allow the camera, and check the list under "Check on the real phone" below.
 2. **Second real roast with the reworked reader** (rounds 3 and 4, released Nov 17 and 18, see "Found on the real phone"). What to watch: does the reading hold through the fast climb in the first 90 s, does the preview stay smooth at 7.5 pictures a second, and what Camera details says when a reading is lost. Afterwards send Settings → Data → Export all.
-3. **Field test and tuning.** Replace the provisional 410°F first-crack reading with the first logged roast. Tune pace-cue timing against real curves. Check the roast review's rate-of-rise findings against real roasts: a normal first-crack bump may read as a "flick", noisy readings may read as a "crash", and a slow first minute may read as a stall. The thresholds are named constants at the top of `js/core/review.js`.
+3. **Decide after the next real roast (user's call, Nov 18; nothing built):**
+   - *Fill short gaps.* Straight-line estimates across gaps of up to about 5 s, added once the next reading arrives, drawn dashed, flagged in the export, raw readings stored untouched; a setting, on by default. Worth it if the roast's gaps are mostly 1–3 s. It would also let the rate of rise recover at once after a gap of 3 s or more.
+   - *Loosen the jump check* (two agreeing seconds instead of three; a second with two far-apart values counts as a candidate). The user chose to leave it as is unless a roast shows a need.
+4. **Field test and tuning.** Replace the provisional 410°F first-crack reading with the first logged roast. Tune pace-cue timing against real curves. Check the roast review's rate-of-rise findings against real roasts: a normal first-crack bump may read as a "flick", noisy readings may read as a "crash", and a slow first minute may read as a stall. The thresholds are named constants at the top of `js/core/review.js`.
 
 ## Found on the real phone
 

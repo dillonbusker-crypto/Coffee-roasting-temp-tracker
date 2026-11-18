@@ -21,8 +21,7 @@ Last updated: Nov 18, 2026. This file is the hand-off log. Update it whenever a 
 
 1. **First run on the iPhone.** Open the live site in Safari, allow the camera, and check the list under "Check on the real phone" below.
 2. **Second real roast with the reworked reader** (rounds 3 and 4, released Nov 17 and 18, see "Found on the real phone"). What to watch: does the reading hold through the fast climb in the first 90 s, does the preview stay smooth at 7.5 pictures a second, and what Camera details says when a reading is lost. Afterwards send Settings → Data → Export all.
-3. **One box instead of two in Setup (decided Nov 17, after round 4 lands).** The reader already looks at one area: the user's solid box plus the dashed widening. Show that as a single box with faint marks for three digit positions, so the user lines the right-hand two up with the digits and nothing is added out of sight. Convert a saved box to the same area. Touches `js/ui/camera-panel.js`, `js/ui/crop-box.js` and `expandBoxForDigits` in `js/reader/camera.js`.
-4. **Field test and tuning.** Replace the provisional 410°F first-crack reading with the first logged roast. Tune pace-cue timing against real curves. Check the roast review's rate-of-rise findings against real roasts: a normal first-crack bump may read as a "flick", noisy readings may read as a "crash", and a slow first minute may read as a stall. The thresholds are named constants at the top of `js/core/review.js`.
+3. **Field test and tuning.** Replace the provisional 410°F first-crack reading with the first logged roast. Tune pace-cue timing against real curves. Check the roast review's rate-of-rise findings against real roasts: a normal first-crack bump may read as a "flick", noisy readings may read as a "crash", and a slow first minute may read as a stall. The thresholds are named constants at the top of `js/core/review.js`.
 
 ## Found on the real phone
 
@@ -62,6 +61,7 @@ Last updated: Nov 18, 2026. This file is the hand-off log. Update it whenever a 
   - *Tried and dropped:* reading from the green or blue channel instead of luma, to see through the reddish reflection. Green gains one or two seconds on video 2 and nothing on video 1; not worth retuning for.
   - *Ideas not built:* a third matching picture when the decision hangs on a faint unlit segment; calibrating the faint-unlit level from the frame's other digits; the filter rejects two seconds as jumps on this video at 5–6 fps when the display falls 153 → 144 → 138 around a missed second.
   - *Footage wanted next:* the same kind of reflection on a display showing 200–400°F; a reflection drifting slowly over the digits for 20 s; a still glare spot on the right-hand digit.
+- **One box in Setup (released Nov 18).** The user asked whether one box would be simpler than the solid box plus the dashed widening. The reader's crop is now the one box the user draws, with two faint lines marking three digit slots; the left slot is wider so that lining the two right-hand slots up with the digits leaves the room the reader needs (on the second video a left edge exactly at the hundreds digit read 8 of 24 three-digit seconds, 5 px more read 22). A box saved before this change is converted once to the area the reader used before. Check on the phone: the saved box still reads, and a box redrawn by the slots reads at two and three digits.
 - **Miss reasons are now shown.** The camera panel says why it can't read, Camera details keeps a 60 s tally, and a saved roast carries `reader.missReasons`.
 
 ## Check on the real phone

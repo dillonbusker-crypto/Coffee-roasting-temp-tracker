@@ -240,10 +240,10 @@ export function createCameraPanel({ units = 'F', settings = {} } = {}) {
     h('div', { class: 'cam-mag' }, h('span', { class: 'cam-cap' }, 'What the reader sees'), crop),
     h('div', { class: 'cam-val' }, h('span', { class: 'cam-cap' }, 'Reads'), value));
   const live = h('div', { class: 'cam-live' },
-    h('p', { class: 'cam-hint' }, 'Put the box around the top-right number, with a little room around it. Line up the two right-hand slots with the digits; the left slot is for the hundreds digit.'),
+    h('p', { class: 'cam-hint' }, 'Put the box around the top-right number. Line up the two right-hand slots with the digits; the wider left slot is for the hundreds digit.'),
     stageWrap,
     h('p', { class: 'cam-legend' },
-      h('span', { class: 'cam-key cam-key-box' }), 'Reading box: drag it to move it, drag a corner or edge to resize it. The faint lines mark the three digit slots.'),
+      h('span', { class: 'cam-key cam-key-box' }), 'Reading box. The faint lines mark the three digit slots. Drag the box to move it, or a corner or edge to resize it.'),
     readRow, status, why);
 
   const tips = h('div', { class: 'cam-tips', id: 'cam-tips' },

@@ -5,7 +5,7 @@
 //
 // `stage` is a positioned element exactly the size of the picture; the box is in coordinates normalised to it (0..1).
 // The box IS the area the reader looks at: nothing is added to it out of sight. Two faint vertical lines split it into three
-// equal digit slots (hundreds, tens, ones). They are drawn here, in the overlay, and never in the pixels the reader gets.
+// digit slots (hundreds, tens, ones; the hundreds slot is the wider one, see DIVIDERS). They are drawn here, in the overlay, and never in the pixels the reader gets.
 // onChange fires on every move; onCommit once when the finger lifts.
 //
 // Gestures: drag inside the box to move it, drag a corner or an edge to resize it, drag on the empty picture to draw a
@@ -16,21 +16,30 @@
 // widget is private to the test page.
 
 import { h } from './dom.js';
-import { clampBox } from '../reader/camera.js';
+import { clampBox, DIGIT_EXTENSION } from '../reader/camera.js';
 
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 // Smallest box, as a fraction of the picture. The box holds three digit slots, so it cannot be a speck: at 1920 by 1080 this
 // is 154 by 43 pixels, enough for the reader (it refuses crops under 24 by 16 pixels) and still easy to place with a thumb.
 const MIN_W = 0.08, MIN_H = 0.04;
-export const SLOTS = 3;
+
+// The three digit slots are not equal. The reader's validated geometry is a box tight around two digits plus DIGIT_EXTENSION box
+// heights on the left (reader/camera.js). One digit position is 0.72 digit heights, so, in box heights, the two right-hand slots
+// are one pitch each and the left (hundreds) slot is the extension: 0.85 + 2 * 0.72 = 2.29 wide. The left slot is the wider one
+// on purpose: the lattice needs room beyond the hundreds cell, and a box whose left edge sits exactly on the pitch cuts that digit off.
+export const DIGIT_PITCH = 0.72;
+const SLOT_WIDTHS = [DIGIT_EXTENSION, DIGIT_PITCH, DIGIT_PITCH];
+const SLOT_TOTAL = SLOT_WIDTHS.reduce((a, b) => a + b, 0);
+/** The two dividers as fractions of the box width, from the left: [0.371, 0.686]. */
+export const DIVIDERS = [SLOT_WIDTHS[0] / SLOT_TOTAL, (SLOT_WIDTHS[0] + SLOT_WIDTHS[1]) / SLOT_TOTAL];
 
 export function createCropBox({ stage, box, onChange = () => {}, onCommit = () => {} }) {
   let cur = clampBox(box);
   let drag = null;
 
-  const dividers = [1, 2].map((i) => {
+  const dividers = DIVIDERS.map((f) => {
     const d = h('div', { class: 'cb-div', 'aria-hidden': 'true' });
-    d.style.left = `${(i * 100 / SLOTS).toFixed(3)}%`;
+    d.style.left = `${(f * 100).toFixed(3)}%`;
     return d;
   });
   const handles = HANDLES.map((n) => h('div', { class: 'cb-h', 'data-h': n }, h('i')));

@@ -312,7 +312,8 @@ async function oneBoxTest(browser, base, finish) {
     assert.equal(await t.page.evaluate(() => localStorage.getItem('rt.camera.box')), null, 'a default box is not saved');
     const hint = await text(t.page, '.cam-hint');
     assert.match(hint, /Put the box around the top-right number/);
-    assert.match(hint, /left slot is for the hundreds digit/);
+    assert.match(hint, /wider left slot is for the hundreds digit/);
+    assert.doesNotMatch(hint, /little room/);
     const tipText = await text(t.page, '#cam-tips');
     assert.match(tipText, /Keep the SET TEMP number and its °F out of the box/);
     const all = await text(t.page, '#cam-panel');
@@ -612,12 +613,12 @@ async function main() {
     for (const k of ['x', 'y', 'w', 'h']) assert.ok(Math.abs(got[k] - TARGET[k]) < 0.02, `box ${k} ${got[k].toFixed(3)} vs ${TARGET[k].toFixed(3)}`);
     const saved = JSON.parse(await page.evaluate(() => localStorage.getItem('rt.camera.box')));
     assert.ok(Math.abs(saved.x - got.x) < 0.005 && Math.abs(saved.w - got.w) < 0.005, 'the box is remembered');
-    step('One box only: no dashed area, two faint dividers split the box into three equal slots, and the reader crops exactly the box');
+    step('One box only: no dashed area, two faint dividers split the box into a wide hundreds slot and two digit slots, and the reader crops exactly the box');
     assert.equal(await page.locator('.cb-ext').count(), 0, 'no second outline');
     const divs = await page.$$eval('.cb-box .cb-div', (els) => els.map((e) => { const r = e.getBoundingClientRect(); return { left: r.left, width: r.width, pe: getComputedStyle(e).pointerEvents, op: getComputedStyle(e).borderLeftColor }; }));
     assert.equal(divs.length, 2, 'two dividers');
     for (const [i, d] of divs.entries()) {
-      const want = b.left + 2 + ((b.width - 4) * (i + 1)) / 3;   // thirds of the area inside the 2 px border
+      const want = b.left + 2 + (b.width - 4) * [0.85 / 2.29, 1.57 / 2.29][i];   // 0.85 box heights for the hundreds slot, 0.72 for each digit slot, inside the 2 px border
       assert.ok(Math.abs(d.left - want) < 1.5, `divider ${i + 1} at ${d.left.toFixed(1)}, expected ${want.toFixed(1)}`);
       assert.ok(d.width <= 1.5 && d.pe === 'none', `divider is thin and lets touches through (${d.width}px, ${d.pe})`);
     }

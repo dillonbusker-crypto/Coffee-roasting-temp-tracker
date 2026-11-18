@@ -1,5 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { DIVIDERS, DIGIT_PITCH } from '../../js/ui/crop-box.js';
 import { createCamera, expandBoxForDigits, DIGIT_EXTENSION } from '../../js/reader/camera.js';
 import {
   BOX_VERSION, readStoredBox, loadBox, saveBox, convertLegacyBox, migrateStoredBox,
@@ -110,4 +111,19 @@ test('the reader test page can still ask the camera for the widened crop', () =>
   cam.grabCrop();
   assert.equal(draws[0][1], Math.round(rb.x * 1280));
   assert.equal(draws[0][3], Math.round(rb.w * 1280));
+});
+
+test('the dividers split the box into a wide hundreds slot and two digit slots of one pitch each', () => {
+  const total = DIGIT_EXTENSION + 2 * DIGIT_PITCH;
+  assert.equal(DIGIT_PITCH, 0.72);
+  near(total, 2.29, 'total width in box heights');
+  near(DIVIDERS[0], 0.85 / 2.29, 'first divider');
+  near(DIVIDERS[1], 1.57 / 2.29, 'second divider');
+  near(DIVIDERS[1] - DIVIDERS[0], DIGIT_PITCH / total, 'tens slot');
+  near(1 - DIVIDERS[1], DIGIT_PITCH / total, 'ones slot');
+  // A box converted from a tight two-digit box (1.44 heights wide) puts the dividers on the digit gaps.
+  const h = 0.2, vw = 1280, vh = 720, tight = { x: 0.5, y: 0.3, w: 2 * DIGIT_PITCH * h * vh / vw, h };
+  const box = convertLegacyBox(tight, vw, vh);
+  near(box.x + box.w * DIVIDERS[0], tight.x, 'first divider at the left edge of the tens digit');
+  near(box.x + box.w * DIVIDERS[1], tight.x + tight.w / 2, 'second divider between the two digits');
 });

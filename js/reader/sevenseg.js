@@ -654,18 +654,19 @@ function classify(pl, g, ev) {
 // unlit. The cell reads as the cheapest pattern if that costs at most COST_MAX and the next is dearer by at least COST_GAP;
 // otherwise nothing is read. Like every tentative verdict this only counts once a second picture confirms it
 // (confirm.js): a segment that is changing does not hold still over two pictures.
-const LIT_REF = 0.45, UNLIT_REF = 0.22, NO_MAP_C = 0.3, NO_MAP = 0.3, BRIGHT_C = -0.1, CLEAR_Q = 0.5, FULL_Q = 0.8, COST_MAX = 0.4, COST_GAP = 0.3;
+export const TUNE = { LIT_REF: 0.45, UNLIT_REF: 0.22, NO_MAP_C: 0.3, NO_MAP: 0.3, BRIGHT_C: -0.1, CLEAR_Q: 0.5, FULL_Q: 0.8, COST_MAX: 0.3, COST_GAP: 0.35, INK_MAP: 0.15 };
 const DIGIT_MASKS = Object.keys(PATTERN_TO_DIGIT).map(Number);
 function resolveCell(segs, cellIndex) {
   if (segs.every(sg => sg.state !== '?')) return; // nothing in doubt
+  const T = TUNE;
   const costLit = new Array(7), costOff = new Array(7);
   for (let k = 0; k < 7; k++) {
     const sg = segs[k], c = sg.cRel;
     if (sg.outside || sg.bad || (sg.state === '?' && !sg.seen)) return; // cannot be judged at all
     if (sg.state === 'on') { costLit[k] = 0; costOff[k] = 9; }
-    else if (c >= NO_MAP_C && sg.fMap < NO_MAP) { costLit[k] = 0; costOff[k] = 0; }
-    else if (c < BRIGHT_C || (c <= UNLIT_REF && sg.q < CLEAR_Q)) { costLit[k] = 0; costOff[k] = 0; } // brighter than the background (glare), or too veiled to say
-    else { costLit[k] = Math.max(0, LIT_REF - c) * Math.min(1, (sg.q - CLEAR_Q) / (FULL_Q - CLEAR_Q)); costOff[k] = Math.max(0, c - UNLIT_REF); }
+    else if (c >= T.NO_MAP_C && sg.fMap < T.NO_MAP) { costLit[k] = 0; costOff[k] = 0; } // clearly dark, but no ink: a label or a rule
+    else if (c < T.BRIGHT_C || (c <= T.UNLIT_REF && (sg.q < T.CLEAR_Q || sg.fMap >= T.INK_MAP))) { costLit[k] = 0; costOff[k] = 0; } // brighter than the background (glare), too veiled to say, or ink in the map
+    else { costLit[k] = Math.max(0, T.LIT_REF - c) * Math.min(1, (sg.q - T.CLEAR_Q) / (T.FULL_Q - T.CLEAR_Q)); costOff[k] = Math.max(0, c - T.UNLIT_REF); }
   }
   let best = 1e9, bestM = -1, second = 1e9;
   for (const m of cellIndex >= 1 ? [0, ...DIGIT_MASKS] : DIGIT_MASKS) {
@@ -673,7 +674,7 @@ function resolveCell(segs, cellIndex) {
     for (let k = 0; k < 7; k++) cost += m >> k & 1 ? costLit[k] : costOff[k];
     if (cost < best) { second = best; best = cost; bestM = m; } else if (cost < second) second = cost;
   }
-  if (best > COST_MAX || second - best < COST_GAP) return;
+  if (best > T.COST_MAX || second - best < T.COST_GAP) return;
   segs.forEach((sg, k) => {
     if (sg.state === 'on') return;
     if (bestM >> k & 1) sg.tent = true; else if (sg.state !== 'off') sg.softOff = true;

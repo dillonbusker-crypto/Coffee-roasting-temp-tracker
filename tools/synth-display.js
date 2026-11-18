@@ -378,8 +378,8 @@ export function addConditions(rng, p, spec) {
     // digit, a red patch nearly hides the b segment of the hundreds digit, and the unlit segments show faintly (0.10-0.20 of a lit one).
     // spec.still = true is the measured strength; { hard: true } adds a brighter band and patch (the background goes up as well).
     const hard = spec.still && spec.still.hard, P = p.pitch * p.H;
-    p.dim = [{ cell: 0, segs: 'abf', factor: rr(rng, 0.55, 0.9) }, { cell: 1, segs: 'abf', factor: rr(rng, 0.55, 0.9) }, { cell: 2, segs: 'abf', factor: rr(rng, 0.55, 0.9) },
-      { cell: 2, segs: 'b', factor: rr(rng, 0.2, 0.9) }];
+    p.dim = [{ cell: 0, segs: 'abf', factor: rr(rng, 0.7, 0.95) }, { cell: 1, segs: 'abf', factor: rr(rng, 0.7, 0.95) }, { cell: 2, segs: 'abf', factor: rr(rng, 0.7, 0.95) },
+      { cell: 2, segs: 'b', factor: rr(rng, 0.3, 1.0) }];
     p.glares = (p.glares || []).concat([{ x: p.xr - P, y: p.y0 + rr(rng, 0.05, 0.25) * p.H, rx: 2.5 * P, ry: rr(rng, 0.22, 0.34) * p.H, angle: 0, amp: hard ? rr(rng, 0.3, 0.5) : rr(rng, 0.05, 0.2), pw: 1.6 }]);
     if (hard) p.glares.push({ x: p.xr - 2 * P - rr(rng, 0.0, 0.12) * P, y: p.y0 + rr(rng, 0.15, 0.3) * p.H, rx: rr(rng, 0.25, 0.4) * P, ry: rr(rng, 0.25, 0.4) * p.H, angle: 0, amp: rr(rng, 0.5, 0.78), pw: 1.4 });
     p.glare = null;

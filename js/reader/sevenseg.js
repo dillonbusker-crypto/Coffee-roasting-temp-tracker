@@ -308,8 +308,6 @@ const VIS_ON = 0.5, VIS_OFF = 0.9; // share of a segment's window that must show
 // they give the local background level right next to each segment, whatever a glare patch is doing to the picture there.
 const HOLLOW_U = [-0.60, -0.34, 0.22, 0.38], HOLLOW_L = [-0.60, -0.34, 0.62, 0.78];
 const SEG_HOLLOW = [[0], [0], [1], [1], [1], [0], [0, 1]]; // which hollow(s) border segment a..g (0 upper, 1 lower)
-const TENT_CONTRAST = 0.14; // tentative tier: possibly lit from this share of the expected contrast up ...
-const TENT_MAP = 0.2;       // ... and only where the ink map also sees ink (glare and lighting gradients darken a segment's window without drawing ink there)
 const ON_CONTRAST = 0.62, ON_CONTRAST_VEILED = 0.5, OFF_CONTRAST = 0.1; // lit: dark by at least this share of the contrast a lit segment should show here; unlit: at most
 const NEIGHBOUR_T = 0.3; // ink this dark (relative to the lit segments) right of the ones cell means a digit was left out
 const ON_LOOSE = 0.5; // registration only: a segment counts as lit above this
@@ -618,25 +616,11 @@ function classify(pl, g, ev) {
       if (!outside && !planeBad && fOn >= ON_T && fMap >= MAP_ON && litByGrey) state = 'on';
       else if (!outside && !planeBad && fOff <= OFF_T && fMapOff <= MAP_OFF && unlitByGrey) state = 'off';
       const hidden = state === '?' && !seen && !outside && !planeBad;
-      // Tentative tier: a segment that is not clearly lit may still be lit under a reflection or a dull patch of the LCD. It counts as
-      // "possibly lit" when it is uniformly darker than the local background by a fair share of what a lit segment should show. Such a
-      // verdict is only ever used together with strict-off verdicts for all the other segments, and only after a second frame has
-      // confirmed it (see confirm.js): a segment half way through changing looks the same in one frame but not over two.
-      let cand = false; // possibly lit
-      if (state === '?' && !outside && !planeBad && seen && cMax >= TENT_CONTRAST * dExp + 2 * ev.sigma) {
-        let best = 0;
-        for (const k of [-1, 0, 1]) {
-          const sx = bar ? 0 : k * dx, sy = bar ? k * dy : 0;
-          best = Math.max(best, darkShareP(ev, x0 + sx, ya + sy, x1 + sx, yb + sy, planeAt, 0.5 * cMax));
-        }
-        cand = best >= 0.85;
-      }
-      const tent = cand && fMap >= TENT_MAP; // possibly lit, and the ink map sees ink there too
       let dn = 0;
       if (state === 'on') { // darkness relative to the contrast this spot should show if lit
         dn = cMax / Math.max(8, 255 - bseg); // contrast per unit of headroom: constant under a glare veil
       }
-      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, tent, cand, softOff: false, seen, bad: planeBad, q: ev.dRef > 0 ? dExp / ev.dRef : 0, hidden, outside, dbg: [bseg, dExp, cMax, ev.bRef, ev.dRef], why: (fOn >= ON_T ? 'F' : '-') + (fOff <= OFF_T ? 'f' : '-') + (litByGrey ? 'G' : '-') + (unlitByGrey ? 'g' : '-') + (seen ? 's' : '-'), dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
+      segs.push({ name: SEG_NAMES[s], x0, y0: ya, x1, y1: yb, fOn, fOff, fMap, visWin, visCore, state, tent: false, softOff: false, seen, bad: planeBad, q: ev.dRef > 0 ? dExp / ev.dRef : 0, hidden, outside, dbg: [bseg, dExp, cMax, ev.bRef, ev.dRef], why: (fOn >= ON_T ? 'F' : '-') + (fOff <= OFF_T ? 'f' : '-') + (litByGrey ? 'G' : '-') + (unlitByGrey ? 'g' : '-') + (seen ? 's' : '-'), dark: dn, cRel: dExp > 0 ? cMax / dExp : 0 });
     }
     resolveCell(segs, i);
     cells.push({ index: i, x0: xr + BODY_L * P, x1: xr, y0: g.y0, y1: g.y0 + H, segs });
@@ -654,18 +638,19 @@ function classify(pl, g, ev) {
 // unlit. The cell reads as the cheapest pattern if that costs at most COST_MAX and the next is dearer by at least COST_GAP;
 // otherwise nothing is read. Like every tentative verdict this only counts once a second picture confirms it
 // (confirm.js): a segment that is changing does not hold still over two pictures.
-export const TUNE = { LIT_REF: 0.45, UNLIT_REF: 0.22, NO_MAP_C: 0.3, NO_MAP: 0.3, BRIGHT_C: -0.1, CLEAR_Q: 0.5, FULL_Q: 0.8, COST_MAX: 0.3, COST_GAP: 0.35, INK_MAP: 0.15 };
+const OFF_DOUBT_C = 0.3, OFF_DOUBT_MAP = 0.15;
+const TUNE = { LIT_REF: 0.55, UNLIT_REF: 0.22, NO_MAP_C: 0.3, NO_MAP: 0.3, BRIGHT_C: -0.1, CLEAR_Q: 0.5, FULL_Q: 0.8, QMIN: 0.6, COST_MAX: 0.45, COST_GAP: 0.25, INK_MAP: 0.15, EM: 0.6 };
 const DIGIT_MASKS = Object.keys(PATTERN_TO_DIGIT).map(Number);
-function resolveCell(segs, cellIndex) {
-  if (segs.every(sg => sg.state !== '?')) return; // nothing in doubt
+// The cheapest digit for a cell, or -1 when no digit is clearly the cheapest (or the cell cannot be judged at all).
+function shapeDecode(segs, cellIndex) {
   const T = TUNE;
   const costLit = new Array(7), costOff = new Array(7);
   for (let k = 0; k < 7; k++) {
-    const sg = segs[k], c = sg.cRel;
-    if (sg.outside || sg.bad || (sg.state === '?' && !sg.seen)) return; // cannot be judged at all
+    const sg = segs[k], c = sg.state === 'on' ? sg.cRel : Math.max(sg.cRel, T.EM * sg.fMap); // the ink map's share counts as contrast too
+    if (sg.outside || sg.bad || (sg.state === '?' && !sg.seen) || sg.q < T.QMIN) return -1; // cannot be judged at all, or too veiled
     if (sg.state === 'on') { costLit[k] = 0; costOff[k] = 9; }
     else if (c >= T.NO_MAP_C && sg.fMap < T.NO_MAP) { costLit[k] = 0; costOff[k] = 0; } // clearly dark, but no ink: a label or a rule
-    else if (c < T.BRIGHT_C || (c <= T.UNLIT_REF && (sg.q < T.CLEAR_Q || sg.fMap >= T.INK_MAP))) { costLit[k] = 0; costOff[k] = 0; } // brighter than the background (glare), too veiled to say, or ink in the map
+    else if (c < T.BRIGHT_C || (c <= T.UNLIT_REF && (sg.q < T.CLEAR_Q || sg.fMap >= T.INK_MAP))) { costLit[k] = 0; costOff[k] = 0; } // brighter than the background (glare), or ink in the map
     else { costLit[k] = Math.max(0, T.LIT_REF - c) * Math.min(1, (sg.q - T.CLEAR_Q) / (T.FULL_Q - T.CLEAR_Q)); costOff[k] = Math.max(0, c - T.UNLIT_REF); }
   }
   let best = 1e9, bestM = -1, second = 1e9;
@@ -674,13 +659,15 @@ function resolveCell(segs, cellIndex) {
     for (let k = 0; k < 7; k++) cost += m >> k & 1 ? costLit[k] : costOff[k];
     if (cost < best) { second = best; best = cost; bestM = m; } else if (cost < second) second = cost;
   }
-  if (best > T.COST_MAX || second - best < T.COST_GAP) return;
-  segs.forEach((sg, k) => {
-    if (sg.state === 'on') return;
-    if (bestM >> k & 1) sg.tent = true; else if (sg.state !== 'off') sg.softOff = true;
-  });
+  return best > T.COST_MAX || second - best < T.COST_GAP ? -1 : bestM;
 }
-
+// A cell with something in doubt reads as that digit; the doubtful segments take its shape.
+function resolveCell(segs, cellIndex) {
+  if (segs.every(sg => sg.state !== '?')) return;
+  const m = shapeDecode(segs, cellIndex);
+  if (m < 0) return;
+  segs.forEach((sg, k) => { if (sg.state === 'on') return; if (m >> k & 1) sg.tent = true; else if (sg.state !== 'off') sg.softOff = true; });
+}
 // Two attempts: the normal one (digits fill most of the crop), then a finer one for loosely drawn boxes (digits less than
 // half the crop height), which are too small at the normal working size.
 const MAX_HINT_SKIPS = 4; // frames in a row that may fail on segment states alone without a new search for the digits
@@ -770,7 +757,10 @@ function decodeAt(planes, best, base, pre, ref) {
   if (judged) {
     const masksT = cells.map(c => c.segs.reduce((m, sg, k) => m | ((sg.state === 'on' || sg.tent) ? 1 << k : 0), 0));
     strict.debug.seg7 = { masks: masksT, c: cells.map(c => c.segs.map(sg => +sg.cRel.toFixed(3))), strict: strict.status !== 'none' };
-    if (strict.status === 'none' && strict.debug.reason === 'ambiguous segment') {
+    // A tentative reading leans on the cells judged strictly, so none of their unlit segments may show real contrast or ink in the map
+    // (a lit segment washed out by glare can pass as unlit; with everything else strict nobody would notice, but a tentative cell beside it would complete the error).
+    const offDoubt = cells.some(c => c.segs.some(sg => sg.state === 'off' && (sg.cRel > OFF_DOUBT_C || sg.fMap > OFF_DOUBT_MAP)));
+    if (strict.status === 'none' && strict.debug.reason === 'ambiguous segment' && !offDoubt) {
       const t = readCells(cells, Object.assign({}, debug), best, pl, pre, ev, true);
       if (t.status === 'ok') strict.debug.tentative = { value: t.value, digits: t.digits, confidence: t.confidence };
     }

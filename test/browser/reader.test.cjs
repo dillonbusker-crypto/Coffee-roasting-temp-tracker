@@ -209,11 +209,12 @@ async function main() {
           const pairs = [['99', '100'], ['199', '200'], ['109', '110'], ['119', '120'], ['89', '90'], ['77', '78'], ['111', '112'], ['168', '169'], ['256', '257'], ['300', '301'], ['499', '500'], ['58', '59'], ['40', '41'], ['157', '158'], ['316', '317'], ['188', '189'], ['569', '570'], ['400', '399'], ['270', '264'], ['381', '376'], ['177', '171'], ['141', '147']];
           const res = {};
           for (const level of ['mild', 'moderate']) {
-            const r = res[level] = { frames: 0, ok: 0, wrong: 0, confirmed: 0, tentative: 0, settled: 0, settledOk: 0, wrongs: [], runs: 0, runsAllRead: 0 };
+            const r = res[level] = { frames: 0, ok: 0, wrong: 0, confirmed: 0, tentative: 0, settled: 0, settledOk: 0, stillSettled: 0, stillSettledOk: 0, wrongs: [], runs: 0, runsAllRead: 0 };
             const runs = FULL ? 280 : 140;
             for (let i = 0; i < runs; i++) {
               const [a, b] = pairs[i % pairs.length];
-              const p0 = R.randomParams(rng, b, level, { margin: 0.1, digitH: 140 });
+              let p0 = R.randomParams(rng, b, level, { margin: 0.1, digitH: 140 });
+              const still = i % 2 === 1; if (still) p0 = R.addConditions(rng, p0, R.CONDITIONS.stillStatic); // every other run under the second video's still reflection
               const gap = [33, 67, 100, 133, 133, 200, 267][i % 7];  // pictures 33 ms .. 267 ms apart: 7.5 fps, a slow phone, and the 30 fps of a video
               const t0 = -Math.floor(rng() * gap) - gap;            // the change begins at 0; pictures at t0, t0 + gap ...
               const conf = C.createConfirmer();
@@ -231,7 +232,7 @@ async function main() {
                   const v = String(q.value), allowed = t < 0 ? [a] : t <= 200 ? [a, b] : [b];   // after the change began, the old value may still be seen for 200 ms
                   if (!allowed.includes(v)) { r.wrong++; r.wrongs.push(`${a}->${b} t=${t} gap=${gap} read ${v}`); }
                 }
-                if (t > 400) { r.settled++; if (q.status === 'ok' && String(q.value) === b) r.settledOk++; else allRead = false; }
+                if (t > 400) { if (still) { r.stillSettled++; if (q.status === 'ok' && String(q.value) === b) r.stillSettledOk++; } else { r.settled++; if (q.status === 'ok' && String(q.value) === b) r.settledOk++; else allRead = false; } }
               }
               if (allRead) r.runsAllRead++;
             }
@@ -239,7 +240,7 @@ async function main() {
           return res;
         }, FULL);
         for (const [lv, r] of Object.entries(out)) {
-          console.log(`      LCD change dynamics + confirmation, ${lv}: ${r.frames} pictures, ${r.ok} read (${r.confirmed} only by confirmation), ${r.tentative} had a tentative reading, ${r.wrong} wrong ${r.wrongs.slice(0, 5).join('; ')}; once settled (>400 ms) ${pct(r.settledOk, r.settled)} read`);
+          console.log(`      LCD change dynamics + confirmation, ${lv}: ${r.frames} pictures, ${r.ok} read (${r.confirmed} only by confirmation), ${r.tentative} had a tentative reading, ${r.wrong} wrong ${r.wrongs.slice(0, 5).join('; ')}; once settled (>400 ms) ${pct(r.settledOk, r.settled)} read, under the still reflection ${pct(r.stillSettledOk, r.stillSettled)}`);
         }
         check(out.mild.wrong === 0 && out.moderate.wrong === 0, 'changes with the LCD dynamics (on 0.13 / 0.59 / 0.73, off 0.34 / 0.15 / 0.07, ghost tail) through the confirmation: never a value that is neither the old nor the new reading', `${out.mild.wrong} + ${out.moderate.wrong} wrong`);
         check(out.mild.settledOk / out.mild.settled >= 0.97, 'changes with the LCD dynamics: the new value is read in at least 97% of the settled pictures at mild', pct(out.mild.settledOk, out.mild.settled));
@@ -300,6 +301,7 @@ async function main() {
           ['mild', 'exposure', 'seq', 160 * k], ['mild', 'glareLight', 'single', 200 * k], ['mild', 'glareMid', 'single', 200 * k],
           ['mild', 'glare', 'single', 200 * k], ['mild', 'glareHard', 'single', 150 * k], ['mild', 'glareGone', 'single', 150 * k],
           ['mild', 'lighting', 'seq', 200 * k], ['moderate', 'glare', 'single', 150 * k],
+          ['mild', 'stillStatic', 'single', 200 * k], ['moderate', 'stillStatic', 'single', 150 * k], ['mild', 'stillHard', 'single', 100 * k], // the second real video: a reflection that stays put
         ];
         const out = await page.evaluate(async scen => {
           const S = await import('../../js/reader/sevenseg.js'), R = await import('../../tools/synth-display.js');

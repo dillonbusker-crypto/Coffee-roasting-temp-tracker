@@ -514,10 +514,10 @@ async function main() {
     for (const k of ['x', 'y', 'w', 'h']) assert.ok(Math.abs(got[k] - TARGET[k]) < 0.02, `box ${k} ${got[k].toFixed(3)} vs ${TARGET[k].toFixed(3)}`);
     const saved = JSON.parse(await page.evaluate(() => localStorage.getItem('rt.camera.box')));
     assert.ok(Math.abs(saved.x - got.x) < 0.005 && Math.abs(saved.w - got.w) < 0.005, 'the box is remembered');
-    step('The reader area (box widened to the left) is shown and stays clear of the SET TEMP number');
+    step('The reader area (box widened to the left) is shown and stays clear of most of the SET TEMP number (widening 0.85: its degree sign and F may enter, see reader/camera.js)');
     const ext = await page.$eval('.cb-ext', (e) => { const r = e.getBoundingClientRect(); return { left: r.left, width: r.width, hidden: e.hidden }; });
     assert.equal(ext.hidden, false);
-    assert.ok(ext.width > 20 && ext.left > s.left + 0.36 * s.width, `ext starts at ${((ext.left - s.left) / s.width).toFixed(3)} of the picture`);
+    assert.ok(ext.width > 20 && ext.left > s.left + 0.33 * s.width, `ext starts at ${((ext.left - s.left) / s.width).toFixed(3)} of the picture`);
 
     step('The live value matches the scene, and Start enables after 5 good reads');
     await page.waitForFunction(() => /Reading 77/.test(document.getElementById('cam-status').textContent), null, { timeout: 8000 });

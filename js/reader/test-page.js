@@ -2,7 +2,7 @@
 import { readDisplay } from './sevenseg.js';
 import { createReadingFilter } from './filter.js';
 import { createConfirmer } from './confirm.js';
-import { createCamera, createFrameLoop, grabCropFrom, expandBoxForDigits, clampBox } from './camera.js';
+import { createCamera, createFrameLoop, grabCropFrom, expandBoxForDigits, clampBox, DIGIT_EXTENSION } from './camera.js';
 
 const $ = id => document.getElementById(id);
 const FPS = 7.5; // as the app: a reflected segment is confirmed from two pictures 133 ms apart (confirm.js)
@@ -44,7 +44,7 @@ class BoxStage {
   setBox(b, silent) { this.box = clampBox(b); this.render(); if (!silent) this.onChange(this.box); }
   toggleZoom() {
     if (this.view) { this.view = null; } else {
-      const b = this.box, ext = 0.7 * b.h * this.sh / this.sw;
+      const b = this.box, ext = DIGIT_EXTENSION * b.h * this.sh / this.sw;
       const s = Math.min(1, Math.max(0.1, 1.7 * (b.w + ext), 3 * b.h));
       const cx = b.x - ext / 2 + b.w / 2, cy = b.y + b.h / 2;
       this.view = { x: Math.min(1 - s, Math.max(0, cx - s / 2)), y: Math.min(1 - s, Math.max(0, cy - s / 2)), s };

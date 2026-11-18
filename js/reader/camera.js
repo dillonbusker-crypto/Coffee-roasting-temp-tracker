@@ -12,10 +12,14 @@
 // Is the stream alive? Only positive evidence says it is not (see startLoop). A clock that has never been seen to move
 // (iOS Safari reports mediaTime 0 and a fixed currentTime for camera streams) is not evidence of anything.
 //
-// The reader's crop is the user's box widened to the left by one digit position (see expandBoxForDigits) so a third digit
+// The reader's crop is the user's box widened to the left by a little over one digit position (see expandBoxForDigits) so a third digit
 // has room when the reading rolls over from 99 to 100, even if the box was drawn tight around two digits.
 
-export const DIGIT_EXTENSION = 0.7; // widening to the left, as a multiple of the box height (one cell pitch is about 0.7 digit heights)
+// Widening to the left, as a multiple of the box height. One cell pitch is 0.70-0.72 digit heights (measured on 9 photos and both videos),
+// and the lattice needs about 0.14 more on the left (the slant, the segment windows and the fit around the cell): a full hundreds digit
+// next to a box drawn tight around two digits needs 0.85. At 0.7 the hundreds cell touched the crop's edge on the second video
+// ("digit cut off at the edge of the crop" on 313 of 512 frames).
+export const DIGIT_EXTENSION = 0.85;
 export const MAX_CROP_HEIGHT = 240; // crops are scaled down to at most this many pixels high; the reader works on less
 
 export function clampBox(b) {
